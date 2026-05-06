@@ -24,6 +24,7 @@ def build_model_client(settings: Settings) -> ModelClient:
         return OllamaClient(
             base_url=settings.local_url,
             model=settings.local_model,
+            num_ctx=settings.local_num_ctx,
         )
 
     if settings.mode == "cloud":

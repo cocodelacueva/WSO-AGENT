@@ -34,6 +34,9 @@ class Settings(BaseSettings):
     # --- Configuración local (Ollama) ---
     local_url: str = "http://localhost:11434"
     local_model: str = "qwen2.5-coder:32b"
+    local_num_ctx: int = 8192
+    """Tamaño del contexto en tokens. Reducirlo libera VRAM (KV cache).
+    8192 funciona bien para WSO; bajalo a 4096 si tu GPU tiene poca memoria."""
 
     # --- Configuración cloud ---
     cloud_provider: Literal["anthropic", "openai", "google"] | None = None

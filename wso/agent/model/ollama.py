@@ -16,9 +16,15 @@ from wso.agent.model.base import Message, ModelClient
 class OllamaClient(ModelClient):
     """Cliente para Ollama local."""
 
-    def __init__(self, base_url: str, model: str) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        model: str,
+        num_ctx: int = 8192,
+    ) -> None:
         self._base_url = base_url
         self._model = model
+        self._num_ctx = num_ctx
         # Import lazy: evita el costo de importar ollama si nunca se usa
         # (ej: cuando WSO_MODE=cloud).
         try:
@@ -59,6 +65,7 @@ class OllamaClient(ModelClient):
                 model=self._model,
                 messages=ollama_messages,
                 stream=True,
+                options={"num_ctx": self._num_ctx},
             )
         except Exception as e:
             raise ConnectionError(
