@@ -1,0 +1,15 @@
+# ============================================================
+# Settings de WSO (no secretos — los secretos van en .env)
+#
+# Este archivo es para defaults que querés versionar. La mayoría
+# de los settings se configuran via .env. Solo lo que NO es
+# secreto y NO depende del entorno va acá.
+# ============================================================
+
+[loop]
+step_budget = 10
+# Cantidad máxima de tool calls antes de pedir continuación al usuario.
+
+[ui]
+show_thinking = true
+# Si false, el thinking del modelo se loguea pero no se renderiza.

@@ -1,0 +1,5 @@
+ollama>=0.3.0
+pydantic>=2.7
+pydantic-settings>=2.3
+rich>=13.7
+python-dotenv>=1.0
