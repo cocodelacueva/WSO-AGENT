@@ -42,6 +42,15 @@ pip install -e ".[dev]"
 wso
 ```
 
+**Requerimientos:**
+Se necesita un PYthon 3.11 o para arriba.
+**Mac:**
+brew install pyenv
+pyenv install 3.12
+pyenv local 3.12   # solo en este proyecto
+
+Y luego se crear la venv con python -m venv .venv
+
 **WINDOWS:**
 
 ```bash
@@ -51,6 +60,13 @@ python -m venv .venv
 pip install -e ".[dev]"
 wso
 ```
+
+## Modelos sugeridos
+
+qwen2.5-coder:32b     # código, PPTs, Excel, scripts
+qwen2.5-coder:14b     # código, PPTs, Excel, scripts / Mas liviano que el otro
+qwen2.5:14b           # conversación, redacción, estrategia
+qwen2.5:7b            # tareas rápidas (opcional)
 
 ## Arquitectura
 
