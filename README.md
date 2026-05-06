@@ -8,6 +8,50 @@ la misma interfaz.
 
 ---
 
+## Setup
+
+Para correr el programa se necesita: Python 3.11.
+
+```bash
+# 1. Instalar dependencias del sistema
+ollama pull qwen2.5-coder:32b
+
+# 2. Instalar dependencias Python
+pip install -r requirements.txt
+# o en modo editable:
+pip install -e ".[dev]"
+
+# 3. Configurar entorno
+cp .env.example .env
+# editá .env según tu setup
+
+# 4. Correr el agente
+wso
+# o:
+python -m wso.main
+```
+
+### Usar maquina virtual de python:
+
+**Mac/linux:**
+```bash
+cd /Users/coco/Documents/DESAROLLO/wso-ai-harness
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
+wso
+```
+
+**WINDOWS:**
+
+```bash
+cd C:\Users\coco\Documents\DESAROLLO\wso-ai-harness
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -e ".[dev]"
+wso
+```
+
 ## Arquitectura
 
 WSO es un harness agéntico conversacional con cuatro principios de diseño:
@@ -39,27 +83,6 @@ workspace/             # área de trabajo del agente (sandboxed)
 
 config/                # settings.toml y permissions.toml persistentes
 logs/                  # audit trail de sesiones
-```
-
-## Setup
-
-```bash
-# 1. Instalar dependencias del sistema
-ollama pull qwen2.5-coder:32b
-
-# 2. Instalar dependencias Python
-pip install -r requirements.txt
-# o en modo editable:
-pip install -e ".[dev]"
-
-# 3. Configurar entorno
-cp .env.example .env
-# editá .env según tu setup
-
-# 4. Correr el agente
-wso
-# o:
-python -m wso.main
 ```
 
 ## Roadmap
