@@ -4,9 +4,9 @@ Uso:
     wso                  # arranca el REPL conversacional
     python -m wso.main   # equivalente
 
-Este módulo es deliberadamente delgado: solo orquesta la inicialización
-y delega al `agent.loop`. Cualquier lógica que no sea wiring va en otro
-módulo.
+Este módulo solo orquesta la inicialización de las dependencias y
+delega al `AgentLoop`. Cualquier lógica de agente, parsing o tools
+vive en otros módulos.
 """
 
 from __future__ import annotations
@@ -16,7 +16,13 @@ import sys
 
 from rich.console import Console
 
+from wso.agent.loop import AgentLoop
+from wso.agent.model.factory import build_model_client
+from wso.agent.prompts import build_system_prompt, load_context_files
 from wso.config import settings
+from wso.permissions.manager import PermissionManager
+from wso.tools.registry import load_builtin_tools
+from wso.ui.console import ConsoleRenderer
 
 
 def main() -> int:
@@ -28,23 +34,72 @@ def main() -> int:
     if settings.mode == "local":
         console.print(f"Modelo local: {settings.local_model} @ {settings.local_url}")
     else:
-        console.print(f"Provider cloud: {settings.cloud_provider} ({settings.cloud_model})")
+        console.print(
+            f"Provider cloud: {settings.cloud_provider} "
+            f"({settings.cloud_model})"
+        )
 
     console.print()
 
     try:
-        return asyncio.run(_run())
+        return asyncio.run(_run(console))
     except KeyboardInterrupt:
-        console.print("\n[dim]Sesión interrumpida.[/dim]")
+        console.print("\n[dim]Sesión interrumpida.[/]")
         return 0
 
 
-async def _run() -> int:
-    """Loop principal asincrónico.
+async def _run(console: Console) -> int:
+    """Loop principal asincrónico: arma todas las dependencias y arranca el REPL."""
+    renderer = ConsoleRenderer(console=console)
 
-    TODO(v1): instanciar AgentLoop con sus dependencias y arrancar el REPL.
-    """
-    raise NotImplementedError("AgentLoop todavía no está implementado — siguiente milestone.")
+    # Asegurar que las carpetas de workspace existan (primer run)
+    _ensure_workspace_dirs()
+
+    # Construir cliente de modelo
+    try:
+        model = build_model_client(settings)
+    except (ValueError, NotImplementedError) as e:
+        renderer.render_error(f"Error de configuración: {e}")
+        return 1
+    except ImportError as e:
+        renderer.render_error(f"Falta dependencia: {e}")
+        return 1
+
+    # Cargar tools, contexto, permisos
+    tools = load_builtin_tools()
+    permissions = PermissionManager(settings=settings)
+    context = load_context_files(settings.context_dir)
+    system_prompt = build_system_prompt(tools, context=context)
+
+    if context:
+        renderer.render_info(
+            f"Contexto cargado desde {settings.context_dir} "
+            f"({len(context)} caracteres)."
+        )
+
+    # Construir y arrancar el loop
+    loop = AgentLoop(
+        model=model,
+        tools=tools,
+        permissions=permissions,
+        renderer=renderer,
+        system_prompt=system_prompt,
+    )
+
+    await loop.run_repl()
+    return 0
+
+
+def _ensure_workspace_dirs() -> None:
+    """Crear las carpetas de workspace si no existen (primer run)."""
+    for directory in [
+        settings.context_dir,
+        settings.automations_dir,
+        settings.output_dir,
+        settings.config_dir,
+        settings.logs_dir,
+    ]:
+        directory.mkdir(parents=True, exist_ok=True)
 
 
 if __name__ == "__main__":
