@@ -63,7 +63,7 @@ wso
 
 ## Modelos sugeridos
 
-qwen2.5-coder:32b     # código, PPTs, Excel, scripts
+qwen2.5-coder:32b     # código, PPTs, Excel, scripts / me resulta muy pesado
 qwen2.5-coder:14b     # código, PPTs, Excel, scripts / Mas liviano que el otro
 qwen2.5:14b           # conversación, redacción, estrategia
 qwen2.5:7b            # tareas rápidas (opcional)
