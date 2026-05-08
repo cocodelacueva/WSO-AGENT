@@ -53,6 +53,13 @@ def build_model_client(settings: Settings) -> ModelClient:
                     model=settings.cloud_model,
                 )
             case "google":
-                raise NotImplementedError("Provider google planeado para v2.")
+                from wso.agent.model.google import GoogleClient
+
+                if settings.google_api_key is None:
+                    raise ValueError("Provider google requiere GOOGLE_API_KEY.")
+                return GoogleClient(
+                    api_key=settings.google_api_key.get_secret_value(),
+                    model=settings.cloud_model,
+                )
 
     raise ValueError(f"Modo desconocido: {settings.mode!r}")
