@@ -51,6 +51,7 @@ def build_model_client(settings: Settings) -> ModelClient:
                 return OpenAIClient(
                     api_key=settings.openai_api_key.get_secret_value(),
                     model=settings.cloud_model,
+                    base_url=settings.openai_base_url,
                 )
             case "google":
                 from wso.agent.model.google import GoogleClient

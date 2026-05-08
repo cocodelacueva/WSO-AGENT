@@ -66,12 +66,14 @@ Cuatro principios guían el diseño:
 │  └────────────────────┘  └────────┬──────────┘                 │
 └──────────────────────────────────┬─┴───────────────────────────┘
                                    │
-              ┌────────────────────┼─────────────────────┐
-              │                    │                     │
-       ┌──────▼──────┐    ┌────────▼──────┐    ┌────────▼──────┐
-       │ OllamaClient│    │AnthropicClient│    │  OpenAIClient │
-       │   (local)   │    │  (stub v2)    │    │  (stub v2)    │
-       └─────────────┘    └───────────────┘    └───────────────┘
+     ┌──────────────┬──────────────┬──────────────┬──────────────┐
+     │              │              │              │              │
+┌────▼─────┐ ┌──────▼──────┐ ┌─────▼──────┐ ┌─────▼──────┐ ┌─────▼──────┐
+│ Ollama   │ │ Anthropic   │ │ OpenAI     │ │ Google     │ │ OpenRouter │
+│ Client   │ │ Client      │ │ Client     │ │ Client     │ │ (vía       │
+│ (local)  │ │ (Claude)    │ │ (GPT)      │ │ (Gemini)   │ │ OpenAI     │
+└──────────┘ └─────────────┘ └────────────┘ └────────────┘ │ compatible)│
+                                                            └────────────┘
 ```
 
 El loop es el componente central. Recibe input del usuario, llama al
@@ -178,11 +180,33 @@ Usamos `tomllib` (3.11+) o `tomli` para lectura. Para escritura,
 escribimos TOML manualmente (formato simple) y evitamos la dependencia
 adicional `tomli_w`.
 
-### 3.13 Abstracción de modelo desde el día 1
+### 3.13 Abstracción de modelo: cuatro providers detrás de la misma interfaz
 
-`ModelClient` ABC con factory que despacha por `WSO_MODE`. v1 implementa
-solo `OllamaClient`; los stubs de Anthropic y OpenAI están listos para
-v2. La estructura ya soporta ambos modos cuando llegue el momento.
+`ModelClient` ABC con factory que despacha por `WSO_MODE` y
+`WSO_CLOUD_PROVIDER`. v1 implementa los cuatro:
+
+- **`OllamaClient`** — local, con `num_ctx` configurable para ajustar
+  el KV cache según la VRAM disponible.
+- **`AnthropicClient`** — Claude. Maneja `system` como param separado
+  (convención de Anthropic) y mergea mensajes consecutivos del mismo
+  rol para evitar errores de la API.
+- **`OpenAIClient`** — GPT, con `base_url` opcional. Esto habilita
+  endpoints OpenAI-compatible: OpenRouter, Together.ai, Groq, Azure
+  OpenAI, vLLM local. Una sola clase cubre muchísimos providers.
+- **`GoogleClient`** — Gemini. Convierte `system` a `system_instruction`
+  (param separado) y `assistant` a `model` (convención de Gemini).
+
+El loop solo conoce la interfaz `ModelClient.stream_chat()`. Cambiar
+de provider es solo cambiar `.env`; el código del agente no se entera.
+
+### 3.14 KV cache configurable en local
+
+Para Ollama, `num_ctx` controla el tamaño del KV cache (memoria que
+escala linealmente con el contexto). Modelos grandes (~30B) con
+contexto default de 16k consumen >40GB total y no caben en GPUs
+medianas (16GB). Exponemos `WSO_LOCAL_NUM_CTX` con default 8192 para
+que el usuario lo ajuste según su hardware. Esto es la diferencia
+entre `100% GPU` y `50/50 CPU/GPU` en `ollama ps`.
 
 ---
 
@@ -200,9 +224,10 @@ wso/
 │   └── model/
 │       ├── base.py               # ModelClient ABC, Message
 │       ├── factory.py            # build_model_client(settings)
-│       ├── ollama.py             # OllamaClient (v1 implementado)
-│       ├── anthropic.py          # AnthropicClient (stub v2)
-│       └── openai.py             # OpenAIClient (stub v2)
+│       ├── ollama.py             # OllamaClient (local, num_ctx configurable)
+│       ├── anthropic.py          # AnthropicClient (Claude)
+│       ├── openai.py             # OpenAIClient (GPT + OpenAI-compatible)
+│       └── google.py             # GoogleClient (Gemini)
 ├── tools/
 │   ├── base.py                   # @tool decorador, ToolDefinition, ToolValidationError
 │   ├── registry.py               # ToolRegistry, load_builtin_tools
@@ -244,8 +269,13 @@ example, y contexto del estudio.
 decisión del usuario.
 
 **`agent/model/`** — Capa de abstracción. `ModelClient` ABC con
-`stream_chat(messages) -> AsyncIterator[str]`. Implementaciones
-concretas por provider.
+`stream_chat(messages) -> AsyncIterator[str]`. Cuatro implementaciones
+concretas: `OllamaClient` (local, con `num_ctx` configurable),
+`AnthropicClient` (Claude, system prompt separado, merge de mensajes
+consecutivos), `OpenAIClient` (GPT y endpoints OpenAI-compatible vía
+`base_url`), `GoogleClient` (Gemini, formato role='model' para
+respuestas). El factory despacha según `WSO_MODE` y
+`WSO_CLOUD_PROVIDER`.
 
 **`tools/base.py`** — El corazón del sistema de tools:
 - `PermissionCategory` enum
@@ -510,10 +540,16 @@ queda gateada por permissions con la categoría declarada.
 
 ### Agregar un provider cloud
 
+Los cuatro providers principales (Ollama, Anthropic, OpenAI, Google)
+ya están implementados. Para agregar uno nuevo:
+
 1. Implementar la clase concreta en `wso/agent/model/<provider>.py`
    heredando de `ModelClient`. Override `stream_chat` y `model_name`.
 2. Editar `wso/agent/model/factory.py` para despachar el caso.
 3. Agregar la API key correspondiente al `.env.example` y a `config.py`.
+4. Si el provider es OpenAI-compatible (Together.ai, Groq, OpenRouter,
+   etc), no hace falta una clase nueva: alcanza con setear
+   `WSO_OPENAI_BASE_URL` apuntando al endpoint y usar `WSO_CLOUD_PROVIDER=openai`.
 
 ### Cambiar el estilo de la UI
 
@@ -539,7 +575,12 @@ automáticamente.
 - [x] 6 tools de v1: read/write/delete/list + responder/preguntar
 - [x] Sistema de permisos completo (categorías + sticky + whitelist)
 - [x] Persistencia TOML
-- [x] Cliente Ollama
+- [x] Cliente Ollama con `num_ctx` configurable (control del KV cache)
+- [x] Cliente Anthropic (Claude)
+- [x] Cliente OpenAI (GPT + endpoints OpenAI-compatible vía `base_url`,
+      ej: OpenRouter, Together.ai, Groq, Azure)
+- [x] Cliente Google (Gemini)
+- [x] System prompt con sección anti-refusal para reforzar tool use
 - [x] UI Rich con streaming visible
 - [x] Budget de 10 con prompt de continuación
 - [x] 214 tests pasando
@@ -549,8 +590,6 @@ automáticamente.
 - [ ] `run_python` con sandbox real (subprocess + AST allowlist)
 - [ ] Tools de Office (PPT, Excel) usando `python-pptx` y `openpyxl`
 - [ ] Tools de LinkedIn (RSS-based, sin scraping)
-- [ ] Cliente Anthropic (Claude)
-- [ ] Cliente OpenAI (compatibilidad GPT/Azure)
 - [ ] Logging estructurado a `logs/session_*.jsonl`
 - [ ] CDATA o entity escaping para args con XML
 

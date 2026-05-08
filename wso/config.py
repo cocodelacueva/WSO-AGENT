@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     cloud_provider: Literal["anthropic", "openai", "google"] | None = None
     cloud_model: str | None = None
 
+    # Base URL custom para endpoints OpenAI-compatible (OpenRouter,
+    # Together.ai, Groq, Azure, vLLM local, etc). Solo aplica si
+    # cloud_provider="openai". Si es None usa la API default de OpenAI.
+    openai_base_url: str | None = None
+
     # --- API Keys (sin prefijo WSO_, son convenciones globales) ---
     anthropic_api_key: SecretStr | None = Field(default=None, alias="ANTHROPIC_API_KEY")
     openai_api_key: SecretStr | None = Field(default=None, alias="OPENAI_API_KEY")

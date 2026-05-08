@@ -68,6 +68,82 @@ qwen2.5-coder:14b     # código, PPTs, Excel, scripts / Mas liviano que el otro
 qwen2.5:14b           # conversación, redacción, estrategia
 qwen2.5:7b            # tareas rápidas (opcional)
 
+## Configuración
+
+WSO se configura con un archivo `.env` en la raíz del proyecto.
+La configuración mínima para correr local con Ollama:
+
+```env
+WSO_MODE=local
+WSO_LOCAL_URL=http://localhost:11434     # o IP de la PC con Ollama
+WSO_LOCAL_MODEL=qwen2.5-coder:14b
+WSO_LOCAL_NUM_CTX=4096                   # tamaño del contexto (KV cache)
+```
+
+`WSO_LOCAL_NUM_CTX` controla cuánta VRAM consume el KV cache. Con
+GPU de 16GB, 4096 deja todo en GPU; 8192 es más holgado pero usa
+más memoria. Bajalo si ves split CPU/GPU en `ollama ps`.
+
+### Cloud providers
+
+WSO soporta los tres grandes providers cloud usando la misma
+interfaz. Solo cambia el `.env` y reiniciás `wso`.
+
+**Google Gemini** (free tier generoso, recomendado para empezar):
+
+```env
+WSO_MODE=cloud
+WSO_CLOUD_PROVIDER=google
+WSO_CLOUD_MODEL=gemini-2.5-flash
+GOOGLE_API_KEY=tu-key
+```
+
+```bash
+pip install "google-generativeai>=0.8"
+```
+
+**Anthropic Claude** (requiere prepay desde console.anthropic.com):
+
+```env
+WSO_MODE=cloud
+WSO_CLOUD_PROVIDER=anthropic
+WSO_CLOUD_MODEL=claude-sonnet-4-5
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+```bash
+pip install "anthropic>=0.40"
+```
+
+**OpenAI GPT:**
+
+```env
+WSO_MODE=cloud
+WSO_CLOUD_PROVIDER=openai
+WSO_CLOUD_MODEL=gpt-4o-mini
+OPENAI_API_KEY=sk-...
+```
+
+```bash
+pip install "openai>=1.50"
+```
+
+**OpenRouter** (acceso a Claude/GPT/Gemini/etc con una sola key,
+sin minimum deposit alto):
+
+```env
+WSO_MODE=cloud
+WSO_CLOUD_PROVIDER=openai
+WSO_CLOUD_MODEL=anthropic/claude-sonnet-4.5
+WSO_OPENAI_BASE_URL=https://openrouter.ai/api/v1
+OPENAI_API_KEY=sk-or-v1-...
+```
+
+OpenRouter usa formato OpenAI-compatible, así que se conecta vía el
+provider `openai` con un `base_url` redirigido. Cambiando solo el
+`WSO_CLOUD_MODEL` podés saltar entre Claude, GPT, Gemini, Mistral,
+Llama, etc. con la misma key.
+
 ## Arquitectura
 
 WSO es un harness agéntico conversacional con cuatro principios de diseño:
@@ -103,21 +179,24 @@ logs/                  # audit trail de sesiones
 
 ## Roadmap
 
-**v1 (en curso):**
-- [ ] Loop agéntico con budget y continuación
-- [ ] Parser XML streaming tolerante
-- [ ] Tools de filesystem (read, write, delete, list)
-- [ ] Tools de control de flujo (responder, preguntar)
-- [ ] Sistema de permisos completo
-- [ ] Cliente Ollama
-- [ ] UI terminal con Rich
+**v1 (cerrado):**
+- [x] Loop agéntico con budget y continuación
+- [x] Parser XML streaming tolerante
+- [x] Tools de filesystem (read, write, delete, list)
+- [x] Tools de control de flujo (responder, preguntar)
+- [x] Sistema de permisos completo
+- [x] Cliente Ollama (con `num_ctx` configurable)
+- [x] Clientes Anthropic, OpenAI, Google
+- [x] Soporte OpenAI-compatible endpoints (OpenRouter, Together.ai, etc)
+- [x] UI terminal con Rich
+- [x] 214 tests pasando
 
 **v2:**
 - [ ] `run_python` con sandbox
 - [ ] Tools de Office (PPT, Excel)
 - [ ] Tools de LinkedIn / scraping
-- [ ] Clientes Anthropic, OpenAI, Google
 - [ ] Persistencia de historial entre sesiones
+- [ ] Logging estructurado a `logs/session_*.jsonl`
 
 ## Notas de diseño
 
