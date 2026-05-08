@@ -113,6 +113,11 @@ _TOOL_CLOSE_RE = re.compile(r"<\s*/\s*tool\s*>", re.IGNORECASE)
 # Note: case-sensitive para arg names (deben matchear la signature exacta).
 _ARG_RE = re.compile(r"<\s*(\w+)\s*>(.*?)<\s*/\s*\1\s*>", re.DOTALL)
 
+# CDATA wrap: algunos modelos envuelven el contenido en <![CDATA[...]]>
+# pensando que escapan caracteres XML. Lo strippeamos para no contaminar
+# HTML/CSS/JS escritos vía write_file.
+_CDATA_RE = re.compile(r"^<!\[CDATA\[(.*)\]\]>$", re.DOTALL)
+
 
 # Para el hold-back de partials, usamos los strings canónicos como
 # referencia de "longest possible suffix that could become this tag".
@@ -315,7 +320,7 @@ class StreamingXMLParser:
         args: dict[str, str] = {}
         for match in _ARG_RE.finditer(body):
             name = match.group(1)
-            value = match.group(2).strip()
+            value = _strip_cdata(match.group(2).strip())
             args[name] = value
         return args
 
@@ -326,3 +331,22 @@ class StreamingXMLParser:
         self._tool_name = None
         self._tool_body = ""
         self.state = ParseState.OUTSIDE
+
+
+# ---------------------------------------------------------------------------
+# Helpers de módulo
+# ---------------------------------------------------------------------------
+
+
+def _strip_cdata(value: str) -> str:
+    """Si el valor está envuelto en <![CDATA[...]]>, devolver solo el contenido.
+
+    Algunos modelos (sobre todo locales y Gemini) envuelven los args en
+    CDATA pensando que escapan caracteres XML. Como nuestro parser no
+    es un XML parser real, los marcadores CDATA terminan en el archivo
+    de destino y rompen HTML/CSS/JS. Esta función limpia el wrap.
+    """
+    match = _CDATA_RE.match(value)
+    if match:
+        return match.group(1).strip()
+    return value

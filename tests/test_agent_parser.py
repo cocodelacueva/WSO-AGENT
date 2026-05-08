@@ -239,6 +239,44 @@ class TestSpecialContent:
             ToolCallComplete(name="echo", args={"msg": "hola   mundo"})
         ]
 
+    def test_cdata_wrap_is_stripped(self) -> None:
+        """Algunos modelos envuelven args en CDATA. El parser lo limpia."""
+        events = parse_chunks(
+            '<tool name="write_file">'
+            "<path>/x.html</path>"
+            "<content><![CDATA[<html>contenido</html>]]></content>"
+            "</tool>"
+        )
+        assert events == [
+            ToolCallComplete(
+                name="write_file",
+                args={"path": "/x.html", "content": "<html>contenido</html>"},
+            )
+        ]
+
+    def test_cdata_wrap_with_multiline_content(self) -> None:
+        events = parse_chunks(
+            '<tool name="write_file">'
+            "<path>/x.css</path>"
+            "<content><![CDATA[\nbody { color: red; }\nh1 { font-size: 2em; }\n]]></content>"
+            "</tool>"
+        )
+        tool = next(e for e in events if isinstance(e, ToolCallComplete))
+        assert tool.args["content"] == "body { color: red; }\nh1 { font-size: 2em; }"
+        assert "CDATA" not in tool.args["content"]
+        assert "]]>" not in tool.args["content"]
+
+    def test_value_without_cdata_unchanged(self) -> None:
+        """Los valores sin CDATA wrap no se tocan."""
+        events = parse_chunks(
+            '<tool name="write_file">'
+            "<path>/x.txt</path>"
+            "<content>contenido normal sin CDATA</content>"
+            "</tool>"
+        )
+        tool = next(e for e in events if isinstance(e, ToolCallComplete))
+        assert tool.args["content"] == "contenido normal sin CDATA"
+
 
 # ---------------------------------------------------------------------------
 # Casos de error y recovery

@@ -63,6 +63,29 @@ NO le pidas al usuario que te pegue el contenido — vos lo leés.
 
 6. Usá rutas absolutas siempre que una tool reciba un path.
 
+7. NO uses CDATA (`<![CDATA[...]]>`) dentro de los args. Pegá el
+   contenido crudo del archivo directamente entre los tags. Esto vale
+   especialmente para HTML, CSS, JavaScript que escribas con write_file
+   — si los envolvés en CDATA, los marcadores terminan en el archivo
+   y rompen el output.
+
+   MAL:
+   <tool name="write_file">
+     <path>/x.html</path>
+     <content><![CDATA[<html>...</html>]]></content>
+   </tool>
+
+   BIEN:
+   <tool name="write_file">
+     <path>/x.html</path>
+     <content><html>...</html></content>
+   </tool>
+
+8. Para HTML/CSS, usá rutas relativas en `href` y `src` (ej:
+   `<link href="style.css">`), NO rutas absolutas del filesystem
+   (`/Users/coco/...`). Los archivos web se sirven desde su carpeta
+   contenedora, no desde la raíz del filesystem.
+
 # Formato de salida
 
 Cada paso debe seguir este formato:
