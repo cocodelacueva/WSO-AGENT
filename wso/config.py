@@ -85,6 +85,13 @@ class Settings(BaseSettings):
     step_budget: int = 10
     """Cantidad máxima de tool calls antes de pedir continuación."""
 
+    # --- Logging estructurado ---
+    log_enabled: bool = False
+    """Si True, cada sesión escribe un .jsonl a `logs_dir` con todos los
+    eventos del agente (turn_start, tool_call, observation, permission, etc).
+    Útil para debug post-mortem, auditoría, y replay de sesiones.
+    Default off para no llenar disco si no lo necesitás."""
+
 
 # Instancia única reutilizable. Importar como `from wso.config import settings`.
 settings = Settings()

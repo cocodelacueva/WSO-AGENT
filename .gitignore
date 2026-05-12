@@ -22,9 +22,9 @@ workspace/context/whitesuit_template.pptx
 .env.local
 config/permissions.toml
 
-# Logs
-logs/*.log
-logs/*.jsonl
+# Logs (session_*.jsonl + cualquier otro formato futuro)
+logs/*
+!logs/.gitkeep
 
 # Output del agente (entregables generados)
 workspace/output/*

@@ -148,6 +148,26 @@ Tools disponibles en v0.2:
 - **XLSX**: `generate_xlsx`, `read_xlsx`, `edit_xlsx_cell`,
   `append_xlsx_rows`.
 
+### Logging estructurado de sesiones
+
+Para activar logging de cada sesión, configurá en `.env`:
+
+```env
+WSO_LOG_ENABLED=true
+```
+
+Cada corrida del REPL escribe un archivo `logs/session_YYYYMMDDTHHMMSS.jsonl`
+con un evento por línea (turn_start, model_response, tool_call, permission,
+observation, error, etc). Útil para:
+
+- Debug post-mortem ("¿por qué el agente hizo X ayer?").
+- Auditoría de acciones aprobadas.
+- Comparar prompts/modelos.
+- Replay de sesiones reales como fixtures de test.
+
+Los `.jsonl` están en `.gitignore` por default, no se commitean. Si no
+activás el flag, el logger queda como no-op y no toca el disco.
+
 **OpenRouter** (acceso a Claude/GPT/Gemini/etc con una sola key,
 sin minimum deposit alto):
 
@@ -209,13 +229,13 @@ logs/                  # audit trail de sesiones
 - [x] Clientes Anthropic, OpenAI, Google
 - [x] Soporte OpenAI-compatible endpoints (OpenRouter, Together.ai, etc)
 - [x] UI terminal con Rich
-- [x] 320 tests pasando (214 base + 49 de pptx + 57 de xlsx en v0.2)
+- [x] 351 tests pasando (214 base + 49 de pptx + 57 de xlsx + 31 de logging en v0.2)
 
 **v2 (en progreso):**
 - [x] Tools de PowerPoint (`generate_pptx`, `read_pptx`, `edit_pptx_slide`, `generate_pptx_from_template`)
 - [x] Tools de Excel (`generate_xlsx`, `read_xlsx`, `edit_xlsx_cell`, `append_xlsx_rows`)
+- [x] Logging estructurado a `logs/session_*.jsonl` (opt-in vía `WSO_LOG_ENABLED=true`)
 - [ ] Tools de LinkedIn / scraping
-- [ ] Logging estructurado a `logs/session_*.jsonl`
 
 **v3 (futuro):**
 - [ ] `run_python` con sandbox (subprocess aislado + cwd limitado + timeout)

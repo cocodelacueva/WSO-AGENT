@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -40,6 +41,7 @@ from wso.agent.parser import (
 )
 from wso.permissions.manager import PermissionDecision, PermissionManager
 from wso.permissions.prompts import ApprovalChoice, ask_approval
+from wso.session_log import SessionLogger
 from wso.tools.base import PermissionCategory, ToolDefinition
 from wso.tools.registry import ToolRegistry
 from wso.ui.console import ConsoleRenderer
@@ -52,6 +54,10 @@ class AgentLoop:
     """Orquestador del loop agéntico.
 
     Dependencias inyectadas en construcción para facilitar testing.
+
+    `session_log` es un `SessionLogger`. Por default es un logger
+    deshabilitado (no-op): no escribe nada al disco. Pasale uno
+    habilitado para tener registro estructurado de la sesión.
     """
 
     model: ModelClient
@@ -61,6 +67,12 @@ class AgentLoop:
     system_prompt: str
     budget: BudgetTracker = field(default_factory=BudgetTracker)
     history: list[Message] = field(default_factory=list)
+    session_log: SessionLogger = field(
+        default_factory=lambda: SessionLogger(log_dir=None)
+    )
+    _turn_count: int = field(default=0, init=False, repr=False)
+    _turn_started_monotonic: float = field(default=0.0, init=False, repr=False)
+    _session_started_monotonic: float = field(default=0.0, init=False, repr=False)
 
     # ---- API pública ----
 
@@ -73,29 +85,49 @@ class AgentLoop:
         )
         self.renderer.render_separator()
 
-        while True:
-            try:
-                user_input = await self._read_user_input()
-            except (EOFError, KeyboardInterrupt):
-                self.renderer.console.print()
-                self.renderer.render_info("Hasta luego.")
-                return
+        self._session_started_monotonic = time.monotonic()
+        self.session_log.log(
+            "session_start",
+            model=self.model.model_name,
+            tools=[t.name for t in self.tools.all()],
+            step_budget=self.budget.limit,
+        )
 
-            user_input = user_input.strip()
-            if not user_input:
-                continue
+        try:
+            while True:
+                try:
+                    user_input = await self._read_user_input()
+                except (EOFError, KeyboardInterrupt):
+                    self.renderer.console.print()
+                    self.renderer.render_info("Hasta luego.")
+                    return
 
-            self.renderer.render_separator()
+                user_input = user_input.strip()
+                if not user_input:
+                    continue
 
-            try:
-                await self.execute_turn(user_input)
-            except KeyboardInterrupt:
-                self.renderer.console.print()
-                self.renderer.render_info("Turno interrumpido.")
-            except Exception as e:  # noqa: BLE001
-                self.renderer.render_error(f"Error inesperado en el turno: {e}")
+                self.renderer.render_separator()
 
-            self.renderer.render_separator()
+                try:
+                    await self.execute_turn(user_input)
+                except KeyboardInterrupt:
+                    self.renderer.console.print()
+                    self.renderer.render_info("Turno interrumpido.")
+                    self.session_log.log("turn_interrupted")
+                except Exception as e:  # noqa: BLE001
+                    self.renderer.render_error(f"Error inesperado en el turno: {e}")
+                    self.session_log.log(
+                        "error", where="turn", message=str(e), kind=type(e).__name__
+                    )
+
+                self.renderer.render_separator()
+        finally:
+            self.session_log.log(
+                "session_end",
+                turns=self._turn_count,
+                duration_ms=int((time.monotonic() - self._session_started_monotonic) * 1000),
+            )
+            self.session_log.close()
 
     async def execute_turn(self, user_input: str) -> None:
         """Ejecutar un turno completo desde un input del usuario.
@@ -103,32 +135,48 @@ class AgentLoop:
         El turno termina cuando el modelo invoca `responder_al_usuario`
         o `preguntar_al_usuario`, o cuando el usuario aborta el budget.
         """
+        self._turn_count += 1
+        self._turn_started_monotonic = time.monotonic()
         self.budget.start_turn(goal=user_input)
         self.history.append(Message(role="user", content=user_input))
+        self.session_log.log("turn_start", turn=self._turn_count, input=user_input)
 
-        while True:
-            # 1. Chequear budget
-            if self.budget.is_exhausted():
-                response = ask_continuation(
-                    self.budget,
-                    console=self.renderer.console,
-                    additional=10,
-                )
-                if response.decision == "abort":
-                    if response.feedback:
-                        # Tratar feedback como nuevo objetivo del turno
-                        self.history.append(
-                            Message(role="user", content=response.feedback)
-                        )
-                        self.budget.start_turn(goal=response.feedback)
-                        continue
+        try:
+            while True:
+                # 1. Chequear budget
+                if self.budget.is_exhausted():
+                    response = ask_continuation(
+                        self.budget,
+                        console=self.renderer.console,
+                        additional=10,
+                    )
+                    self.session_log.log(
+                        "budget_continuation",
+                        decision=response.decision,
+                        feedback=response.feedback,
+                    )
+                    if response.decision == "abort":
+                        if response.feedback:
+                            # Tratar feedback como nuevo objetivo del turno
+                            self.history.append(
+                                Message(role="user", content=response.feedback)
+                            )
+                            self.budget.start_turn(goal=response.feedback)
+                            continue
+                        return
+                    self.budget.extend(10)
+
+                # 2. Ejecutar un paso
+                terminal = await self._execute_step()
+                if terminal:
                     return
-                self.budget.extend(10)
-
-            # 2. Ejecutar un paso
-            terminal = await self._execute_step()
-            if terminal:
-                return
+        finally:
+            self.session_log.log(
+                "turn_end",
+                turn=self._turn_count,
+                steps=len(self.budget.history),
+                duration_ms=int((time.monotonic() - self._turn_started_monotonic) * 1000),
+            )
 
     # ---- Loop interno: un paso ----
 
@@ -187,6 +235,9 @@ class AgentLoop:
                     self.renderer.render_thinking_end()
         except Exception as e:  # noqa: BLE001
             self.renderer.render_error(f"Error de modelo: {e}")
+            self.session_log.log(
+                "error", where="model_stream", message=str(e), kind=type(e).__name__
+            )
             # Anexar error como observación para que el modelo lo vea si reintentamos
             self.history.append(
                 Message(role="assistant", content=full_response or "(sin respuesta)")
@@ -194,6 +245,7 @@ class AgentLoop:
             return None
 
         self.history.append(Message(role="assistant", content=full_response))
+        self.session_log.log("model_response", text=full_response)
         return executed_tool
 
     def _handle_no_tool_emitted(self) -> bool:
@@ -205,6 +257,7 @@ class AgentLoop:
         self.renderer.render_error(
             "El modelo no emitió ninguna tool. Reintentando con feedback."
         )
+        self.session_log.log("error", where="parser", message="no tool emitted")
         self.history.append(
             Message(
                 role="user",
@@ -231,6 +284,10 @@ class AgentLoop:
         Returns:
             True si la tool fue terminal (responder/preguntar).
         """
+        self.session_log.log(
+            "tool_call", name=tool_call.name, args=tool_call.args
+        )
+
         tool_def = self.tools.get(tool_call.name)
         if tool_def is None:
             return self._handle_unknown_tool(tool_call)
@@ -244,6 +301,13 @@ class AgentLoop:
 
         # Ejecutar
         result, success, error_msg = self._execute_tool(tool_def, tool_call.args)
+        self.session_log.log(
+            "observation",
+            tool=tool_call.name,
+            success=success,
+            result=str(result),
+            error=error_msg,
+        )
 
         # Registrar en el budget
         self.budget.record(
@@ -275,6 +339,9 @@ class AgentLoop:
     def _handle_unknown_tool(self, tool_call: ToolCallComplete) -> bool:
         """Tool con nombre que no existe en el registry."""
         self.renderer.render_error(f"Tool desconocida: {tool_call.name!r}")
+        self.session_log.log(
+            "error", where="tool_lookup", tool=tool_call.name, message="unknown tool"
+        )
         available = ", ".join(t.name for t in self.tools.all())
         self.history.append(
             Message(
@@ -304,6 +371,9 @@ class AgentLoop:
         """Aplicar gating de permisos. Retorna True si la tool puede ejecutar."""
         decision = self.permissions.check(tool_def, args)
         if decision == PermissionDecision.AUTO_APPROVED:
+            self.session_log.log(
+                "permission", tool=tool_def.name, decision="auto_approved"
+            )
             return True
 
         # NEEDS_APPROVAL: pedirle al usuario
@@ -311,6 +381,17 @@ class AgentLoop:
             tool_def,
             args,
             console=self.renderer.console,
+        )
+        choice_value = (
+            response.choice.value
+            if hasattr(response.choice, "value")
+            else str(response.choice)
+        )
+        self.session_log.log(
+            "permission",
+            tool=tool_def.name,
+            decision=choice_value,
+            feedback=response.feedback,
         )
 
         if response.choice == ApprovalChoice.DENY:

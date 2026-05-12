@@ -210,6 +210,31 @@ medianas (16GB). Exponemos `WSO_LOCAL_NUM_CTX` con default 8192 para
 que el usuario lo ajuste según su hardware. Esto es la diferencia
 entre `100% GPU` y `50/50 CPU/GPU` en `ollama ps`.
 
+### 3.16 Logging estructurado opt-in con no-op default
+
+El `SessionLogger` (`wso/session_log.py`) es **opt-in vía
+`WSO_LOG_ENABLED=true`** y opera como **no-op** si está deshabilitado.
+Decisiones internas:
+
+- **No-op real, no flag interno.** Si `log_dir is None`, ningún archivo
+  se abre, ningún disco se toca, ningún ciclo de CPU se gasta. El loop
+  llama a `.log()` siempre, el método chequea `enabled` y retorna early.
+- **Lazy file open.** El archivo se crea recién cuando llega el primer
+  evento. Si el usuario abre y cierra `wso` sin tipear nada, no queda
+  basura en `logs/`.
+- **Tolerante a I/O errors.** Si escribir falla (disco lleno, permisos,
+  etc.), el logger se auto-deshabilita en lugar de tirar la sesión. El
+  logging es accesorio, no debería poder romper el flow.
+- **JSONL canónico.** Un evento por línea, válido JSON, terminado en
+  `\n`. Parseable con `for line in f: json.loads(line)`, truncable con
+  `head` / `tail`, rotable sin parser propio.
+- **Dependencias mínimas.** Solo stdlib (`json`, `datetime`, `pathlib`,
+  `contextlib`). No agrega superficie de dep al proyecto.
+
+Esto cierra el principio 3 (Observabilidad) con un canal persistente,
+complementando al streaming visible en terminal: la terminal muestra
+en vivo, el JSONL preserva post-mortem.
+
 ### 3.15 Args complejos: JSON dentro de un arg string
 
 Las tools de Office (v0.2) necesitan recibir estructuras anidadas: una
@@ -268,8 +293,9 @@ wso/
 ├── permissions/
 │   ├── manager.py                # PermissionManager + AlwaysAllowRule
 │   └── prompts.py                # ask_approval, parse_approval_input
-└── ui/
-    └── console.py                # ConsoleRenderer (Rich wrapper)
+├── ui/
+│   └── console.py                # ConsoleRenderer (Rich wrapper)
+└── session_log.py                # SessionLogger (JSONL estructurado, opt-in)
 ```
 
 ### Responsabilidades por módulo
@@ -363,6 +389,17 @@ separado de `ask_approval` para testeo sin I/O. Códigos
 **`ui/console.py`** — `ConsoleRenderer` con métodos semánticos
 (`render_thinking_chunk`, `render_tool_call`, `render_observation`,
 etc). Centraliza Rich. Cambiar el estilo no requiere tocar lógica.
+
+**`session_log.py`** — `SessionLogger` que serializa eventos del agente
+a JSONL en `logs/session_{timestamp}.jsonl`. Opt-in vía
+`WSO_LOG_ENABLED=true`. Si está deshabilitado (default), todas las
+llamadas a `.log()` son no-op y no se toca el disco. Lazy file open
+(no se crean archivos vacíos), tolerante a errores de I/O (si falla
+escribir se auto-deshabilita en vez de tumbar la sesión), encoding
+UTF-8, eventos one-per-line con timestamp ISO 8601 UTC. El loop lo
+inyecta como dependencia y lo llama en puntos clave: session_start,
+turn_start, model_response, tool_call, permission, observation, error,
+turn_end, session_end.
 
 ---
 
@@ -536,24 +573,25 @@ flushea con un `ParseError` si quedó algo abierto.
 
 ## 8. Tests
 
-**320 tests passing**, distribuidos:
+**351 tests passing**, distribuidos:
 
-| Archivo                                | Tests | Cobertura                                          |
-|----------------------------------------|-------|----------------------------------------------------|
-| `test_tools_base.py`                   | 15    | Decorador `@tool`, validación, `to_prompt_section` |
-| `test_tools_registry.py`               | 11    | Registro, escaneo de módulos, `load_builtin_tools` |
-| `test_tools_filesystem.py`             | 21    | read/write/delete/list con tmp_path, edge cases    |
-| `test_tools_flow.py`                   | 11    | responder/preguntar, parsing de opciones, JSON     |
-| `test_tools_pptx.py`                   | 46    | Schemas, generate/read/edit/from_template, errores |
-| `test_tools_xlsx.py`                   | 57    | Schemas, generate/read/edit/append, errores        |
-| `test_agent_parser.py`                 | 42    | Parser streaming, partials, recovery, determinismo |
-| `test_permissions_manager.py`          | 17    | Reglas, whitelist, sticky, persistencia TOML       |
-| `test_permissions_prompts.py`          | 28    | parse codes, panel rendering, ask_approval         |
-| `test_agent_prompts.py`                | 13    | System prompt builder, load_context_files          |
-| `test_agent_budget.py`                 | 26    | Tracker, parse continuation, panel, ask            |
-| `test_ui_console.py`                   | 17    | Cada render method, truncation, panels             |
-| `test_agent_loop.py`                   | 11    | Integración: turnos completos, errores, budget     |
-| **Total**                              | **320** |                                                  |
+| Archivo                                | Tests | Cobertura                                                |
+|----------------------------------------|-------|----------------------------------------------------------|
+| `test_tools_base.py`                   | 15    | Decorador `@tool`, validación, `to_prompt_section`       |
+| `test_tools_registry.py`               | 11    | Registro, escaneo de módulos, `load_builtin_tools`       |
+| `test_tools_filesystem.py`             | 21    | read/write/delete/list con tmp_path, edge cases          |
+| `test_tools_flow.py`                   | 11    | responder/preguntar, parsing de opciones, JSON           |
+| `test_tools_pptx.py`                   | 46    | Schemas, generate/read/edit/from_template, errores       |
+| `test_tools_xlsx.py`                   | 57    | Schemas, generate/read/edit/append, errores              |
+| `test_session_log.py`                  | 25    | Logger JSONL, encoding, lazy file open, manejo I/O       |
+| `test_agent_parser.py`                 | 42    | Parser streaming, partials, recovery, determinismo       |
+| `test_permissions_manager.py`          | 17    | Reglas, whitelist, sticky, persistencia TOML             |
+| `test_permissions_prompts.py`          | 28    | parse codes, panel rendering, ask_approval               |
+| `test_agent_prompts.py`                | 13    | System prompt builder, load_context_files                |
+| `test_agent_budget.py`                 | 26    | Tracker, parse continuation, panel, ask                  |
+| `test_ui_console.py`                   | 17    | Cada render method, truncation, panels                   |
+| `test_agent_loop.py`                   | 17    | Integración: turnos completos + emisión de eventos al log|
+| **Total**                              | **351** |                                                        |
 
 Los tests de `test_tools_pptx.py` y `test_tools_xlsx.py` se skipean
 automáticamente si `python-pptx` / `openpyxl` no están instalados
@@ -668,8 +706,12 @@ automáticamente.
 - [x] Tools de Excel (`openpyxl`): `generate_xlsx`, `read_xlsx`,
       `edit_xlsx_cell`, `append_xlsx_rows`. Soporta múltiples sheets,
       headers con bold, fórmulas como strings (`"=A1+B1"`).
+- [x] Logging estructurado a `logs/session_*.jsonl`. SessionLogger
+      opt-in vía `WSO_LOG_ENABLED=true`. Eventos: session_start/end,
+      turn_start/end, model_response, tool_call, permission,
+      observation, error, budget_continuation. Útil para debug
+      post-mortem, auditoría, y replay de sesiones reales.
 - [ ] Tools de LinkedIn (RSS-based, sin scraping)
-- [ ] Logging estructurado a `logs/session_*.jsonl`
 - [ ] CDATA o entity escaping para args con XML (desbloquea estructuras
       anidadas sin pasar por JSON)
 
