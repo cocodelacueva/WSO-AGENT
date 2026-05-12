@@ -109,16 +109,28 @@ class TestToolRegistry:
 
 
 class TestLoadBuiltinTools:
-    def test_loads_all_v1_tools(self) -> None:
+    def test_loads_all_builtin_tools(self) -> None:
         registry = load_builtin_tools()
 
         expected = {
+            # filesystem
             "read_file",
             "write_file",
             "delete_file",
             "list_directory",
+            # flow
             "responder_al_usuario",
             "preguntar_al_usuario",
+            # pptx (v0.2)
+            "generate_pptx",
+            "read_pptx",
+            "edit_pptx_slide",
+            "generate_pptx_from_template",
+            # xlsx (v0.2)
+            "generate_xlsx",
+            "read_xlsx",
+            "edit_xlsx_cell",
+            "append_xlsx_rows",
         }
         actual = {t.name for t in registry.all()}
         assert actual == expected
@@ -132,10 +144,20 @@ class TestLoadBuiltinTools:
         assert registry.get("delete_file").category == PermissionCategory.DELETE
         assert registry.get("responder_al_usuario").category == PermissionCategory.FLOW
         assert registry.get("preguntar_al_usuario").category == PermissionCategory.FLOW
+        # pptx tools
+        assert registry.get("generate_pptx").category == PermissionCategory.WRITE
+        assert registry.get("read_pptx").category == PermissionCategory.READ
+        assert registry.get("edit_pptx_slide").category == PermissionCategory.WRITE
+        assert registry.get("generate_pptx_from_template").category == PermissionCategory.WRITE
+        # xlsx tools
+        assert registry.get("generate_xlsx").category == PermissionCategory.WRITE
+        assert registry.get("read_xlsx").category == PermissionCategory.READ
+        assert registry.get("edit_xlsx_cell").category == PermissionCategory.WRITE
+        assert registry.get("append_xlsx_rows").category == PermissionCategory.WRITE
 
     def test_idempotent_creates_independent_registries(self) -> None:
         # Cada llamada devuelve un registry nuevo (no comparten estado)
         r1 = load_builtin_tools()
         r2 = load_builtin_tools()
         assert r1 is not r2
-        assert len(r1) == len(r2) == 6
+        assert len(r1) == len(r2) == 14

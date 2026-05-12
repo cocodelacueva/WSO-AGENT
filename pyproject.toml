@@ -31,6 +31,8 @@ dev = [
 google = ["google-generativeai>=0.8"]
 anthropic = ["anthropic>=0.40"]
 openai = ["openai>=1.50"]
+# Tools de Office (instalá si vas a generar/leer .pptx, .xlsx)
+office = ["python-pptx>=1.0", "openpyxl>=3.1"]
 
 [project.scripts]
 wso = "wso.main:main"

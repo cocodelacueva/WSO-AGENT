@@ -128,6 +128,26 @@ OPENAI_API_KEY=sk-...
 pip install "openai>=1.50"
 ```
 
+### Tools de Office
+
+Para generar/editar archivos `.pptx` y `.xlsx`, instalá la extra opcional:
+
+```bash
+pip install -e ".[office]"
+# o: pip install python-pptx openpyxl
+```
+
+Sin esta extra, las tools de office siguen registradas pero fallan al
+invocarse con un mensaje guía pidiendo instalar la dep correspondiente.
+Las demás tools del agente (filesystem, flow) no se ven afectadas.
+
+Tools disponibles en v0.2:
+
+- **PPTX**: `generate_pptx`, `read_pptx`, `edit_pptx_slide`,
+  `generate_pptx_from_template`.
+- **XLSX**: `generate_xlsx`, `read_xlsx`, `edit_xlsx_cell`,
+  `append_xlsx_rows`.
+
 **OpenRouter** (acceso a Claude/GPT/Gemini/etc con una sola key,
 sin minimum deposit alto):
 
@@ -189,11 +209,12 @@ logs/                  # audit trail de sesiones
 - [x] Clientes Anthropic, OpenAI, Google
 - [x] Soporte OpenAI-compatible endpoints (OpenRouter, Together.ai, etc)
 - [x] UI terminal con Rich
-- [x] 214 tests pasando
+- [x] 320 tests pasando (214 base + 49 de pptx + 57 de xlsx en v0.2)
 
-**v2:**
+**v2 (en progreso):**
 - [ ] `run_python` con sandbox
-- [ ] Tools de Office (PPT, Excel)
+- [x] Tools de PowerPoint (`generate_pptx`, `read_pptx`, `edit_pptx_slide`, `generate_pptx_from_template`)
+- [x] Tools de Excel (`generate_xlsx`, `read_xlsx`, `edit_xlsx_cell`, `append_xlsx_rows`)
 - [ ] Tools de LinkedIn / scraping
 - [ ] Persistencia de historial entre sesiones
 - [ ] Logging estructurado a `logs/session_*.jsonl`

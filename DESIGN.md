@@ -208,6 +208,31 @@ medianas (16GB). Exponemos `WSO_LOCAL_NUM_CTX` con default 8192 para
 que el usuario lo ajuste según su hardware. Esto es la diferencia
 entre `100% GPU` y `50/50 CPU/GPU` en `ollama ps`.
 
+### 3.15 Args complejos: JSON dentro de un arg string
+
+Las tools de Office (v0.2) necesitan recibir estructuras anidadas: una
+lista de slides, cada uno con su layout, título, bullets, notas, etc.
+El parser XML de v1 no soporta tags anidados en el body de `<tool>`
+(ver sección 7 — limitación conocida). Tenemos dos caminos:
+
+1. Codear v0.2 del parser con XML anidado real (CDATA / entity escaping).
+2. **Workaround**: el arg es un string que contiene JSON. El modelo emite
+   el JSON como texto plano dentro de `<slides_json>...</slides_json>`,
+   el handler parsea con `json.loads` y valida con Pydantic.
+
+Elegimos (2) para v0.2 porque:
+
+- No requiere tocar el parser (riesgo de regresiones en algo crítico).
+- El JSON es un formato que los modelos ya conocen bien y emiten correctamente.
+- Pydantic con discriminated unions valida cleanly y produce errores legibles
+  (campo `layout` decide la forma exacta del slide).
+- Coherente con `preguntar_al_usuario`, que ya devuelve JSON internamente.
+
+Trade-off explícito: el modelo ve un string opaco en el prompt en lugar
+de campos individuales. Mitigado con un ejemplo claro en `args_schema`
+del decorador. El XML anidado real queda en el roadmap para v0.3 si
+algún caso lo necesita.
+
 ---
 
 ## 4. Mapa de módulos
@@ -233,6 +258,10 @@ wso/
 │   ├── registry.py               # ToolRegistry, load_builtin_tools
 │   ├── filesystem.py             # read_file, write_file, delete_file, list_directory
 │   ├── flow.py                   # responder_al_usuario, preguntar_al_usuario
+│   ├── pptx.py                   # generate_pptx, read_pptx, edit_pptx_slide, generate_pptx_from_template
+│   ├── pptx_schemas.py           # Pydantic models de slides (discriminated union)
+│   ├── xlsx.py                   # generate_xlsx, read_xlsx, edit_xlsx_cell, append_xlsx_rows
+│   ├── xlsx_schemas.py           # Pydantic models de sheets/workbook
 │   └── code.py                   # run_python (stub v2)
 ├── permissions/
 │   ├── manager.py                # PermissionManager + AlwaysAllowRule
@@ -286,7 +315,36 @@ respuestas). El factory despacha según `WSO_MODE` y
 
 **`tools/registry.py`** — `ToolRegistry` que escanea módulos buscando
 funciones con `_tool_def` adjunto. `load_builtin_tools()` importa
-`filesystem` y `flow` y devuelve un registry poblado.
+`filesystem`, `flow`, `pptx` y `xlsx`, y devuelve un registry poblado
+con 14 tools.
+
+**`tools/pptx.py`** — Cuatro tools declarativas sobre `python-pptx`:
+`generate_pptx` (crear desde JSON), `read_pptx` (extraer texto y notas),
+`edit_pptx_slide` (modificación puntual in-place), y
+`generate_pptx_from_template` (reusa branding de un template). La dep
+`python-pptx` se importa lazy en `_require_pptx()` — el módulo se importa
+y se registran las tools sin tenerla instalada; solo falla al invocarse
+con un mensaje guía pidiendo `pip install -e ".[office]"`.
+
+**`tools/pptx_schemas.py`** — Modelos Pydantic de cada layout de slide
+(`TitleSlide`, `ContentSlide`, `SectionHeaderSlide`, `TwoContentSlide`,
+`ImageSlide`, `BlankSlide`) unidos en un `Annotated[Union[...],
+Field(discriminator="layout")]`. Permite que un solo JSON valide a la
+variante correcta y devuelva errores claros si la forma no matchea
+ninguna.
+
+**`tools/xlsx.py`** — Cuatro tools sobre `openpyxl`: `generate_xlsx`
+(crear desde JSON de sheets), `read_xlsx` (extraer datos con
+`max_rows` opcional), `edit_xlsx_cell` (modificar celda puntual con
+notación A1), y `append_xlsx_rows` (agregar filas al final, útil para
+tracking incremental). Soporta múltiples sheets, headers en bold,
+y fórmulas (cualquier string que empiece con `=`). Lazy import vía
+`_require_openpyxl()` con el mismo patrón que pptx.
+
+**`tools/xlsx_schemas.py`** — Modelos `Sheet` (name, headers, rows) y
+`Workbook` (lista de sheets). Las celdas son `bool | int | float | str
+| None` (los tipos nativos de JSON). Sin discriminated union acá: el
+shape de Sheet es uniforme y no necesita ramificación por tipo.
 
 **`permissions/manager.py`** — `PermissionManager` con check, remember,
 y persistencia. La regla de despacho es:
@@ -476,7 +534,7 @@ flushea con un `ParseError` si quedó algo abierto.
 
 ## 8. Tests
 
-**214 tests passing**, distribuidos:
+**320 tests passing**, distribuidos:
 
 | Archivo                                | Tests | Cobertura                                          |
 |----------------------------------------|-------|----------------------------------------------------|
@@ -484,6 +542,8 @@ flushea con un `ParseError` si quedó algo abierto.
 | `test_tools_registry.py`               | 11    | Registro, escaneo de módulos, `load_builtin_tools` |
 | `test_tools_filesystem.py`             | 21    | read/write/delete/list con tmp_path, edge cases    |
 | `test_tools_flow.py`                   | 11    | responder/preguntar, parsing de opciones, JSON     |
+| `test_tools_pptx.py`                   | 46    | Schemas, generate/read/edit/from_template, errores |
+| `test_tools_xlsx.py`                   | 57    | Schemas, generate/read/edit/append, errores        |
 | `test_agent_parser.py`                 | 42    | Parser streaming, partials, recovery, determinismo |
 | `test_permissions_manager.py`          | 17    | Reglas, whitelist, sticky, persistencia TOML       |
 | `test_permissions_prompts.py`          | 28    | parse codes, panel rendering, ask_approval         |
@@ -491,7 +551,12 @@ flushea con un `ParseError` si quedó algo abierto.
 | `test_agent_budget.py`                 | 26    | Tracker, parse continuation, panel, ask            |
 | `test_ui_console.py`                   | 17    | Cada render method, truncation, panels             |
 | `test_agent_loop.py`                   | 11    | Integración: turnos completos, errores, budget     |
-| **Total**                              | **214** |                                                  |
+| **Total**                              | **320** |                                                  |
+
+Los tests de `test_tools_pptx.py` y `test_tools_xlsx.py` se skipean
+automáticamente si `python-pptx` / `openpyxl` no están instalados
+(`pytest.importorskip`), así que la suite sigue corriendo en setups
+mínimos sin la extra `[office]`.
 
 ### Estrategia
 
@@ -521,22 +586,30 @@ from wso.tools.base import PermissionCategory, tool
 
 
 @tool(
-    name="generate_pptx",
+    name="generate_xlsx",
     category=PermissionCategory.WRITE,
-    description="Genera un .pptx desde markdown.",
+    description="Genera un .xlsx desde una lista de filas.",
     args_schema={
-        "input_md": "ruta absoluta del .md de entrada",
-        "output_pptx": "ruta absoluta donde escribir el .pptx",
+        "output_path": "ruta absoluta donde escribir el .xlsx",
+        "rows_json": "JSON array con las filas. Ej: [[\"A\",\"B\"],[1,2]]",
     },
 )
-def generate_pptx(input_md: str, output_pptx: str) -> str:
+def generate_xlsx(output_path: str, rows_json: str) -> str:
     # ... tu lógica acá ...
-    return f"Generado: {output_pptx}"
+    return f"Generado: {output_path}"
 ```
 
 Después editás `tools/registry.py:load_builtin_tools()` para importar
 `my_module`. La tool aparece automáticamente en el system prompt y
 queda gateada por permissions con la categoría declarada.
+
+**Para tools con estructuras complejas**: las tools de pptx ilustran el
+patrón JSON-in-string (decisión 3.15). Si tu tool necesita pasar una
+lista o un objeto anidado, exponé un único arg `*_json` (string) y
+parseá + validá con Pydantic dentro del handler. Si una dep externa
+opcional es necesaria (como `python-pptx` o `openpyxl`), importala lazy
+dentro de un `_require_*()` helper para que el módulo siga importándose
+sin la extra instalada.
 
 ### Agregar un provider cloud
 
@@ -585,13 +658,19 @@ automáticamente.
 - [x] Budget de 10 con prompt de continuación
 - [x] 214 tests pasando
 
-### v0.2 (próximo)
+### v0.2 (en progreso)
 
 - [ ] `run_python` con sandbox real (subprocess + AST allowlist)
-- [ ] Tools de Office (PPT, Excel) usando `python-pptx` y `openpyxl`
+- [x] Tools de PowerPoint (`python-pptx`): `generate_pptx`, `read_pptx`,
+      `edit_pptx_slide`, `generate_pptx_from_template`. JSON-in-string
+      como workaround para args complejos (decisión 3.15).
+- [x] Tools de Excel (`openpyxl`): `generate_xlsx`, `read_xlsx`,
+      `edit_xlsx_cell`, `append_xlsx_rows`. Soporta múltiples sheets,
+      headers con bold, fórmulas como strings (`"=A1+B1"`).
 - [ ] Tools de LinkedIn (RSS-based, sin scraping)
 - [ ] Logging estructurado a `logs/session_*.jsonl`
-- [ ] CDATA o entity escaping para args con XML
+- [ ] CDATA o entity escaping para args con XML (desbloquea estructuras
+      anidadas sin pasar por JSON)
 
 ### v0.3 (futuro)
 
