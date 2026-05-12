@@ -698,7 +698,7 @@ automáticamente.
 - [x] Budget de 10 con prompt de continuación
 - [x] 214 tests pasando
 
-### v0.2 (en progreso)
+### v0.2 (cerrado)
 
 - [x] Tools de PowerPoint (`python-pptx`): `generate_pptx`, `read_pptx`,
       `edit_pptx_slide`, `generate_pptx_from_template`. JSON-in-string
@@ -711,12 +711,28 @@ automáticamente.
       turn_start/end, model_response, tool_call, permission,
       observation, error, budget_continuation. Útil para debug
       post-mortem, auditoría, y replay de sesiones reales.
-- [ ] Tools de LinkedIn (RSS-based, sin scraping)
 - [ ] CDATA o entity escaping para args con XML (desbloquea estructuras
-      anidadas sin pasar por JSON)
+      anidadas sin pasar por JSON). Diferido — no apareció un caso de
+      uso concreto todavía.
+
+**Cancelado de v0.2:** Tools de LinkedIn RSS-based. Se descartó porque
+LinkedIn bloquea agresivamente RSS y Sales Navigator (caso de uso real
+del estudio) no expone feed. La alternativa correcta es el browser bridge
+(v0.3) — usar el Chrome real del usuario, ya logueado, sin pasar
+credenciales.
 
 ### v0.3 (futuro)
 
+- [ ] **Browser bridge mínimo** — el agente maneja el Chrome real del
+      usuario (vía Playwright + CDP attach) reutilizando sus sesiones
+      logueadas. Reemplaza el approach LinkedIn-RSS (no viable). Sirve
+      como puente general para cualquier app web sin API: LinkedIn,
+      Sales Navigator, Notion, Airtable, dashboards internos, etc.
+      Tools mínimas: `browser_open_tab`, `browser_navigate`,
+      `browser_read_page`, `browser_click`, `browser_type`,
+      `browser_screenshot`, `browser_wait_for`, `browser_close_tab`.
+      Categoría de permiso nueva: `BROWSER`. Ver Apéndice A más abajo
+      para el plan técnico completo.
 - [ ] `run_python` con sandbox real (subprocess aislado + cwd limitado a
       `workspace/` + timeout + EXECUTE permission gateado). Es el escape
       hatch del patrón híbrido (decisión 3.1) para tareas raras que no
@@ -747,3 +763,167 @@ Si encontrás un caso que el harness no maneja bien, los puntos de
 extensión están claros: nueva tool, nuevo provider, nuevo render
 style. Los principios fundacionales (patrón C, modelo 3, XML, sticky
 permissions) son intencionalmente estables.
+
+---
+
+## Apéndice A — Plan del Browser bridge (v0.3)
+
+Este apéndice condensa las decisiones que ya discutimos sobre cómo el
+agente va a manejar un navegador real, para no tener que re-discutirlas
+cuando volvamos al tema. **No es código todavía** — es el scope acordado.
+
+### A.1 Por qué browser bridge en lugar de scraping / RSS
+
+El approach original "tools de LinkedIn vía RSS" se descartó por dos
+razones concretas del estudio:
+
+1. **LinkedIn bloquea RSS agresivamente.** Los bridges públicos
+   (RSSHub, etc.) tienen cobertura inconsistente y dependen de hacks
+   que se rompen con cada cambio de UI de LinkedIn.
+2. **Sales Navigator no expone RSS.** Es la herramienta real que usa
+   White Suit. Cualquier solución que no la cubra es teatro.
+
+Una alternativa intermedia — scraping con `requests`/`httpx` — falla
+por anti-bot detection (LinkedIn detecta requests sin headers de
+navegador real, fingerprint de TLS, etc.) y por requerir credenciales
+en el `.env`.
+
+El **browser bridge** evita ambos problemas: el agente no tiene
+credenciales (las cookies viven en tu Chrome), y LinkedIn ve un
+navegador real porque ES tu navegador real.
+
+### A.2 Stack técnico
+
+- **Playwright** como engine de automatización
+  (`extra: browser = ["playwright>=1.40"]`).
+- **CDP attach** vía `playwright.chromium.connect_over_cdp(url)` — el
+  agente NO arranca un Chrome propio; se conecta a uno que vos ya
+  iniciaste. Esto preserva tu user-data-dir, tus cookies, tus
+  extensiones, todo.
+- **API sync** (`playwright.sync_api`) para mantener la convención de
+  WSO de que las tools son funciones sync. El loop sigue siendo async,
+  pero las tools individuales bloquean — el patrón actual.
+- **Config nueva**: `WSO_BROWSER_CDP_URL` (default
+  `http://localhost:9222`).
+
+### A.3 UX para arrancar Chrome
+
+El usuario tiene que iniciar Chrome con el flag de debugging. Dos
+caminos:
+
+1. **Script helper en `scripts/`**: `launch-chrome-cdp.sh` (Mac/Linux)
+   y `.ps1` (Windows) que iniciás vos antes de `wso`. Documentado en
+   README.
+2. **Alias en `.zshrc`/`.bashrc`**: `alias wso-chrome="open -a Google\ Chrome --args --remote-debugging-port=9222"`.
+
+Cuestión abierta: ¿usar el `user-data-dir` default (todas tus
+cuentas) o uno separado (perfil aislado solo para WSO)? Trade-off:
+
+- **Default**: pleno acceso a todas tus sesiones. Más útil pero más
+  riesgoso si el agente hace algo raro.
+- **Separado**: aislamiento, pero tenés que loguearte por separado en
+  cada sitio. Menos cómodo, más seguro.
+
+Recomendación inicial: documentar ambos, default = separado, opt-in al
+default con flag.
+
+### A.4 Tools propuestas (alcance mínimo)
+
+| Tool                   | Categoría | Args                          | Comentario                              |
+|------------------------|-----------|-------------------------------|-----------------------------------------|
+| `browser_open_tab`     | BROWSER   | url                           | Crea tab nueva, foco automático.        |
+| `browser_navigate`     | BROWSER   | url                           | Navega tab activa.                      |
+| `browser_close_tab`    | BROWSER   | -                             | Cierra tab activa.                      |
+| `browser_read_page`    | READ      | (max_chars opcional)          | Texto del DOM (sin scripts ni navs).    |
+| `browser_screenshot`   | READ      | output_path                   | Guarda PNG. Útil para debug.            |
+| `browser_click`        | BROWSER   | selector (CSS o texto)        | Click humano (con scroll-into-view).    |
+| `browser_type`         | BROWSER   | selector, text                | Type human-like en input.               |
+| `browser_wait_for`     | READ      | selector, timeout_ms          | Espera elemento (SPA-friendly).         |
+
+Notas:
+
+- `selector` puede ser CSS (`button.submit`) o texto (`text=Enviar`).
+  Playwright soporta ambos.
+- `browser_read_page` es READ porque solo lee. Eso significa que entra
+  en el whitelist de auto-aprobación junto con `read_file` — válido
+  porque ya estás viendo esa página vos.
+- `browser_screenshot` también READ, pero su salida va a un path que
+  podría estar fuera de whitelist — entonces el path se valida como
+  cualquier write.
+
+### A.5 Categoría de permiso `BROWSER`
+
+Nueva entrada en `PermissionCategory`. Política sugerida:
+
+- **No auto-aprobar nada por default.**
+- **Sticky por dominio**: si aprobás `browser_navigate(url)` para
+  `linkedin.com`, las navegaciones futuras a `linkedin.com/*` también
+  se aprueban. Aprobar es a nivel de **dominio**, no de URL completa.
+- **Acciones (click, type) tienen sticky más estricto**: aprobás por
+  dominio + por tipo de acción. Ej: `[allow] domain=linkedin.com action=click`
+  cubre todos los clicks en LinkedIn pero no los `browser_type`.
+- **Sin política `always` persistente al inicio**: solo sesión. Hasta
+  que el modelo esté maduro suficiente, evitamos auto-aprobar entre
+  sesiones para algo tan poderoso como manejo de navegador.
+
+### A.6 Async / sync
+
+Playwright tiene dos APIs: `sync_api` y `async_api`. Las tools de WSO
+son funciones sync (corren dentro del loop async pero blocking). Usar
+`sync_api` directamente requiere que **no esté corriendo un event loop**
+en el mismo thread cuando se llama.
+
+Esto choca con `asyncio.to_thread` que el loop usa. Camino limpio:
+
+- Cada tool de browser corre vía `asyncio.to_thread`, que abre un thread
+  worker donde Playwright sync_api puede operar tranquilo.
+- El cliente Playwright (`browser`, `context`, `page`) es **estado
+  global del módulo `wso/tools/browser.py`** con lazy-init en el primer
+  call. Cleanup en `atexit` o en el `session_end` del loop.
+
+Alternativa: usar `async_api` y hacer las tools async. Es más limpio
+arquitecturalmente pero requiere cambios en el contrato de
+`ToolDefinition.validate_and_call` para soportar awaitables. Trade-off
+para evaluar cuando lleguemos.
+
+### A.7 Riesgos conocidos
+
+- **Anti-bot de LinkedIn / Sales Navigator**: incluso con browser real
+  pueden detectarte (mouse movement patterns, timing, CDP detection).
+  Mitigaciones: `playwright-stealth`, delays randomizados, hacer reads
+  pasivos antes que actions, no spammear. **Aceptamos que pueden
+  bloquearte si abusás** — es responsabilidad del usuario.
+- **CDP detection**: algunos sitios detectan que Chrome corre con CDP
+  abierto vía `navigator.webdriver` u otros checks. Workaround:
+  arrancar Chrome con `--disable-blink-features=AutomationControlled`.
+- **Iframes**: LinkedIn usa varios. `browser_click` necesita poder
+  apuntar dentro de un iframe (Playwright lo maneja con `frame_locator`).
+- **Cookies de terceros / consent dialogs**: pueden aparecer
+  inesperadamente. Las tools tienen que ser tolerantes a "selector no
+  encontrado" en lugar de tirar excepción dura.
+- **Session expiry**: si tu sesión de LinkedIn caduca a mitad de un
+  turno, el agente puede confundirse. El loop debería poder detectar
+  pantallas de login y abortar con un mensaje claro al usuario.
+
+### A.8 Tests
+
+- **Tests unit del cliente**: mock de Playwright (`pytest-playwright`
+  trae fixtures útiles) — verificar que las tools mapean args a
+  llamadas correctas.
+- **Tests de integración local**: levantar un servidor `http.server`
+  con HTML fixturas, conectar Playwright real, verificar el end-to-end
+  contra un sitio controlado.
+- **Tests E2E con LinkedIn**: NO en CI. Documentados como manuales
+  ("script manual: probar leer feed personal una vez").
+
+### A.9 Cuándo empezar
+
+Esta sección queda como contrato para cuando volvamos al tema. Antes
+de codear:
+
+1. Decidir definitivamente el caso de uso #1 (probablemente: "leeme
+   los últimos N posts de Sales Navigator y resumímelos").
+2. Validar manualmente que Playwright + CDP attach funciona en tu
+   Chrome real con tu Sales Navigator logueado. Si LinkedIn detecta el
+   automation y te limita, el plan completo cambia.
+3. Recién entonces, abrir el iter de browser bridge.

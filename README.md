@@ -231,13 +231,18 @@ logs/                  # audit trail de sesiones
 - [x] UI terminal con Rich
 - [x] 351 tests pasando (214 base + 49 de pptx + 57 de xlsx + 31 de logging en v0.2)
 
-**v2 (en progreso):**
+**v2 (cerrado):**
 - [x] Tools de PowerPoint (`generate_pptx`, `read_pptx`, `edit_pptx_slide`, `generate_pptx_from_template`)
 - [x] Tools de Excel (`generate_xlsx`, `read_xlsx`, `edit_xlsx_cell`, `append_xlsx_rows`)
 - [x] Logging estructurado a `logs/session_*.jsonl` (opt-in vía `WSO_LOG_ENABLED=true`)
-- [ ] Tools de LinkedIn / scraping
 
 **v3 (futuro):**
+- [ ] **Browser bridge mínimo** — el agente maneja tu Chrome real
+      (vía Playwright + CDP attach), reutilizando tus sesiones logueadas.
+      Tools: `browser_open_tab`, `browser_navigate`, `browser_read_page`,
+      `browser_click`, `browser_type`, `browser_screenshot`, `browser_wait_for`.
+      Reemplaza el approach LinkedIn-RSS (no viable: LinkedIn bloquea y
+      Sales Navigator no expone RSS). Ver DESIGN.md, apéndice "Browser bridge".
 - [ ] `run_python` con sandbox (subprocess aislado + cwd limitado + timeout)
 - [ ] Persistencia de historial entre sesiones
 - [ ] Memoria de largo plazo (RAG sobre `/context`)
