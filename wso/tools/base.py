@@ -26,13 +26,12 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError, create_model
 
-
 # ---------------------------------------------------------------------------
 # Categorías de permiso
 # ---------------------------------------------------------------------------
 
 
-class PermissionCategory(str, Enum):
+class PermissionCategory(str, Enum):  # noqa: UP042 — StrEnum es 3.11+; mantener este shape por ahora
     """Categorías de permiso para clasificar tools.
 
     El `PermissionManager` consulta esta categoría para decidir si una

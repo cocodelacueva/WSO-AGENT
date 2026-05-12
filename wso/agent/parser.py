@@ -34,7 +34,6 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from enum import Enum, auto
 
-
 # ---------------------------------------------------------------------------
 # Eventos
 # ---------------------------------------------------------------------------

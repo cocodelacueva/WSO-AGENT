@@ -11,7 +11,6 @@ from collections.abc import AsyncIterator
 
 from wso.agent.model.base import Message, ModelClient
 
-
 # Tokens máximos a generar por respuesta. La API de Anthropic
 # requiere este parámetro. 8192 cubre thinking + tool calls largos
 # sin truncar.

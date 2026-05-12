@@ -44,7 +44,6 @@ from wso.tools.base import PermissionCategory, ToolDefinition
 from wso.tools.registry import ToolRegistry
 from wso.ui.console import ConsoleRenderer
 
-
 _USER_PROMPT_MARKUP = "[bold cyan]›[/] "
 
 
@@ -189,7 +188,9 @@ class AgentLoop:
         except Exception as e:  # noqa: BLE001
             self.renderer.render_error(f"Error de modelo: {e}")
             # Anexar error como observación para que el modelo lo vea si reintentamos
-            self.history.append(Message(role="assistant", content=full_response or "(sin respuesta)"))
+            self.history.append(
+                Message(role="assistant", content=full_response or "(sin respuesta)")
+            )
             return None
 
         self.history.append(Message(role="assistant", content=full_response))

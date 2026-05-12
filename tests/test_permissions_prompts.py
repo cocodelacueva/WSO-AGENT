@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from io import StringIO
 
 import pytest
@@ -182,7 +183,7 @@ class TestRenderApprovalPanel:
 class TestApprovalResponse:
     def test_is_frozen(self) -> None:
         response = ApprovalResponse(choice=ApprovalChoice.APPROVE_ONCE)
-        with pytest.raises(Exception):  # FrozenInstanceError
+        with pytest.raises(FrozenInstanceError):
             response.choice = ApprovalChoice.DENY  # type: ignore[misc]
 
     def test_feedback_default_none(self) -> None:

@@ -10,7 +10,6 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from io import StringIO
 from pathlib import Path
-from typing import Any
 
 import pytest
 from rich.console import Console
@@ -21,7 +20,6 @@ from wso.agent.prompts import build_system_prompt
 from wso.permissions.manager import PermissionManager
 from wso.tools.registry import load_builtin_tools
 from wso.ui.console import ConsoleRenderer
-
 
 # ---------------------------------------------------------------------------
 # Fakes y fixtures

@@ -18,7 +18,6 @@ from pathlib import Path
 
 from wso.tools.registry import ToolRegistry
 
-
 _SYSTEM_PROMPT_TEMPLATE = """\
 Sos WSO (White Suit Operator), un agente de ejecución para el estudio
 White Suit Studio. Operás sobre el sistema de archivos local del usuario
