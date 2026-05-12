@@ -169,7 +169,7 @@ Llama, etc. con la misma key.
 WSO es un harness agéntico conversacional con cuatro principios de diseño:
 
 1. **Patrón híbrido** — tools tipadas para operaciones comunes,
-   `run_python` como escape hatch para casos no previstos (v2).
+   `run_python` como escape hatch para casos no previstos (v3).
 2. **Loop con elicitación explícita** — el turno solo termina cuando el
    modelo invoca `responder_al_usuario` o `preguntar_al_usuario`.
 3. **Permisos granulares** — todas las acciones de escritura/borrado
@@ -190,7 +190,7 @@ wso/                   # código del agente
 
 workspace/             # área de trabajo del agente (sandboxed)
 ├── context/           # info de devs, proyectos, briefs
-├── automations/       # scripts custom invocables vía run_python (v2)
+├── automations/       # scripts custom invocables vía run_python (v3)
 └── output/            # entregables generados
 
 config/                # settings.toml y permissions.toml persistentes
@@ -212,12 +212,16 @@ logs/                  # audit trail de sesiones
 - [x] 320 tests pasando (214 base + 49 de pptx + 57 de xlsx en v0.2)
 
 **v2 (en progreso):**
-- [ ] `run_python` con sandbox
 - [x] Tools de PowerPoint (`generate_pptx`, `read_pptx`, `edit_pptx_slide`, `generate_pptx_from_template`)
 - [x] Tools de Excel (`generate_xlsx`, `read_xlsx`, `edit_xlsx_cell`, `append_xlsx_rows`)
 - [ ] Tools de LinkedIn / scraping
-- [ ] Persistencia de historial entre sesiones
 - [ ] Logging estructurado a `logs/session_*.jsonl`
+
+**v3 (futuro):**
+- [ ] `run_python` con sandbox (subprocess aislado + cwd limitado + timeout)
+- [ ] Persistencia de historial entre sesiones
+- [ ] Memoria de largo plazo (RAG sobre `/context`)
+- [ ] Tools async (HTTP, base de datos)
 
 ## Notas de diseño
 

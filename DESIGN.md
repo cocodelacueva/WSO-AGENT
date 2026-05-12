@@ -90,10 +90,12 @@ principales:
 ### 3.1 Paradigma de ejecución: híbrido (Patrón C)
 
 Tools tipadas para operaciones comunes (read/write/delete/list, control
-de flujo) con un escape hatch `run_python` previsto para v2. La razón:
+de flujo) con un escape hatch `run_python` previsto para v0.3. La razón:
 los casos repetitivos (PPT, Excel, LinkedIn) merecen tools tipadas para
 ser predecibles y auditables; los casos raros pueden caer al sandbox de
-Python para no codear una tool por cada combinación.
+Python para no codear una tool por cada combinación. Diferimos el sandbox
+a v0.3 porque hacerlo bien (subprocess + resource limits + filesystem
+isolation) merece su propia iteración de diseño.
 
 ### 3.2 Conversacional con elicitación explícita (Modelo 3)
 
@@ -262,7 +264,7 @@ wso/
 │   ├── pptx_schemas.py           # Pydantic models de slides (discriminated union)
 │   ├── xlsx.py                   # generate_xlsx, read_xlsx, edit_xlsx_cell, append_xlsx_rows
 │   ├── xlsx_schemas.py           # Pydantic models de sheets/workbook
-│   └── code.py                   # run_python (stub v2)
+│   └── code.py                   # run_python (stub — implementación en v0.3)
 ├── permissions/
 │   ├── manager.py                # PermissionManager + AlwaysAllowRule
 │   └── prompts.py                # ask_approval, parse_approval_input
@@ -660,7 +662,6 @@ automáticamente.
 
 ### v0.2 (en progreso)
 
-- [ ] `run_python` con sandbox real (subprocess + AST allowlist)
 - [x] Tools de PowerPoint (`python-pptx`): `generate_pptx`, `read_pptx`,
       `edit_pptx_slide`, `generate_pptx_from_template`. JSON-in-string
       como workaround para args complejos (decisión 3.15).
@@ -674,6 +675,12 @@ automáticamente.
 
 ### v0.3 (futuro)
 
+- [ ] `run_python` con sandbox real (subprocess aislado + cwd limitado a
+      `workspace/` + timeout + EXECUTE permission gateado). Es el escape
+      hatch del patrón híbrido (decisión 3.1) para tareas raras que no
+      merecen una tool tipada propia. Diferido a v0.3 porque hacerlo bien
+      requiere decisiones de diseño propias del sandbox (subprocess vs
+      RestrictedPython vs WASM) que no queremos rushear.
 - [ ] Persistencia de historial entre sesiones
 - [ ] Memoria de largo plazo (RAG sobre `/context`)
 - [ ] Modo no-conversacional para batch jobs

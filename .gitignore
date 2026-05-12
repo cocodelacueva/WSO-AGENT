@@ -16,7 +16,7 @@ build/
 .venv/
 venv/
 env/
-
+workspace/context/whitesuit_template.pptx
 # Secrets y configuración local
 .env
 .env.local
