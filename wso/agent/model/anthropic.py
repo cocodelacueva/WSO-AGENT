@@ -3,6 +3,11 @@
 Usa la SDK oficial `anthropic` con streaming async.
 El system prompt va separado del historial de mensajes (convención
 de la API de Anthropic).
+
+Retry automático con exponential backoff: el SDK reintenta hasta 3 veces
+ante errores transitorios (overloaded, rate limit, internal server error,
+connection error). El usuario no se entera de los reintentos salvo que
+fallen todos.
 """
 
 from __future__ import annotations
@@ -16,6 +21,12 @@ from wso.agent.model.base import Message, ModelClient
 # sin truncar.
 _DEFAULT_MAX_TOKENS = 8192
 
+# Reintentos automáticos del SDK ante errores transitorios
+# (overloaded_error, rate_limit, 5xx, connection errors). Cada reintento
+# usa exponential backoff. 3 intentos cubre la mayoría de overloads de
+# Anthropic sin alargar mucho la espera.
+_DEFAULT_MAX_RETRIES = 3
+
 
 class AnthropicClient(ModelClient):
     """Cliente para Anthropic Claude API."""
@@ -25,6 +36,7 @@ class AnthropicClient(ModelClient):
         api_key: str,
         model: str,
         max_tokens: int = _DEFAULT_MAX_TOKENS,
+        max_retries: int = _DEFAULT_MAX_RETRIES,
     ) -> None:
         self._api_key = api_key
         self._model_name = model
@@ -36,7 +48,10 @@ class AnthropicClient(ModelClient):
                 "El paquete 'anthropic' no está instalado. "
                 "Instalalo con: pip install anthropic"
             ) from e
-        self._client = anthropic.AsyncAnthropic(api_key=api_key)
+        self._client = anthropic.AsyncAnthropic(
+            api_key=api_key,
+            max_retries=max_retries,
+        )
 
     @property
     def model_name(self) -> str:
@@ -86,6 +101,27 @@ class AnthropicClient(ModelClient):
                     if text:
                         yield text
         except Exception as e:
+            # Detectar overload para dar un mensaje accionable al usuario
+            error_str = str(e)
+            if "overloaded" in error_str.lower():
+                hint = (
+                    " Los servidores de Anthropic están saturados ahora "
+                    "(no es problema de tu cuenta). Probá de nuevo en "
+                    "unos minutos o cambiá a claude-haiku-4-5 o claude-sonnet-4-5 "
+                    "que se saturan menos."
+                )
+            elif "rate_limit" in error_str.lower():
+                hint = (
+                    " Llegaste al rate limit de tu cuenta. Esperá un minuto "
+                    "y reintentá."
+                )
+            elif "credit" in error_str.lower() or "billing" in error_str.lower():
+                hint = (
+                    " Falta crédito en tu cuenta Anthropic. "
+                    "Cargá más en https://console.anthropic.com"
+                )
+            else:
+                hint = ""
             raise ConnectionError(
-                f"Error en Anthropic API ({self._model_name}): {e}"
+                f"Error en Anthropic API ({self._model_name}): {e}.{hint}"
             ) from e

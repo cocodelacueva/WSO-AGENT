@@ -495,13 +495,45 @@ class AgentLoop:
     # ---- I/O ----
 
     async def _read_user_input(self) -> str:
-        """Leer una línea del usuario con prompt formateado.
+        """Leer input del usuario, juntando líneas pegadas como un solo mensaje.
 
         Usa `asyncio.to_thread` para no bloquear el event loop con `input()`.
+        Después de la primera línea, chequea si hay más data buffereada
+        en stdin (señal de paste multilínea) y la concatena. Si el usuario
+        solo tipeó una línea y presionó Enter, devuelve solo eso.
         """
-        return await asyncio.to_thread(
-            self.renderer.console.input, _USER_PROMPT_MARKUP
-        )
+        return await asyncio.to_thread(self._read_user_input_sync)
+
+    def _read_user_input_sync(self) -> str:
+        """Versión bloqueante: lee primera línea, después drena buffered lines."""
+        import select
+        import sys
+
+        first = self.renderer.console.input(_USER_PROMPT_MARKUP)
+        lines = [first]
+
+        # Si después del Enter hay más data esperando en stdin, fue un paste.
+        # Drenamos todas las líneas buffereadas y las juntamos.
+        # Solo aplica si stdin es un TTY (no aplica a pipes ni archivos).
+        if not sys.stdin.isatty():
+            return first
+
+        while True:
+            ready, _, _ = select.select([sys.stdin], [], [], 0.05)
+            if not ready:
+                break
+            try:
+                lines.append(sys.stdin.readline().rstrip("\n"))
+            except (EOFError, OSError):
+                break
+
+        if len(lines) > 1:
+            joined = "\n".join(lines)
+            self.renderer.render_info(
+                f"(detecté paste de {len(lines)} líneas, juntando como un mensaje)"
+            )
+            return joined
+        return first
 
 
 # ---------------------------------------------------------------------------

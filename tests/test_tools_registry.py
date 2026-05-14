@@ -131,6 +131,9 @@ class TestLoadBuiltinTools:
             "read_xlsx",
             "edit_xlsx_cell",
             "append_xlsx_rows",
+            # pdf / docx (v0.2)
+            "read_pdf",
+            "read_docx",
         }
         actual = {t.name for t in registry.all()}
         assert actual == expected
@@ -154,10 +157,13 @@ class TestLoadBuiltinTools:
         assert registry.get("read_xlsx").category == PermissionCategory.READ
         assert registry.get("edit_xlsx_cell").category == PermissionCategory.WRITE
         assert registry.get("append_xlsx_rows").category == PermissionCategory.WRITE
+        # pdf / docx tools
+        assert registry.get("read_pdf").category == PermissionCategory.READ
+        assert registry.get("read_docx").category == PermissionCategory.READ
 
     def test_idempotent_creates_independent_registries(self) -> None:
         # Cada llamada devuelve un registry nuevo (no comparten estado)
         r1 = load_builtin_tools()
         r2 = load_builtin_tools()
         assert r1 is not r2
-        assert len(r1) == len(r2) == 14
+        assert len(r1) == len(r2) == 16
