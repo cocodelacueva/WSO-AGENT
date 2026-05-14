@@ -56,7 +56,8 @@ Y luego se crear la venv con python -m venv .venv
 ```bash
 cd C:\Users\coco\Documents\DESAROLLO\wso-ai-harness
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+Mac: source .venv/bin/activate
+windows: .\.venv\Scripts\Activate.ps1
 pip install -e ".[dev]"
 wso
 ```
