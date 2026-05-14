@@ -19,7 +19,7 @@ ollama pull qwen2.5-coder:32b
 # 2. Instalar dependencias Python
 pip install -r requirements.txt
 # o en modo editable:
-pip install -e ".[dev]"
+pip install -e ".[all]"
 
 # 3. Configurar entorno
 cp .env.example .env
