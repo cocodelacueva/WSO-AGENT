@@ -21,6 +21,11 @@ from typing import Any
 
 from wso.tools.base import PermissionCategory, tool
 
+# Tope default de caracteres por lectura. Acota cada read a un tamaño
+# predecible para no desbordar el contexto del modelo (ver
+# truncate_with_notice en base.py). El modelo puede subirlo si necesita más.
+_DEFAULT_MAX_CHARS = 16000
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -74,10 +79,19 @@ def _validate_pdf_path_for_read(path: str) -> Path:
     ),
     args_schema={
         "path": "ruta absoluta del archivo .pdf a leer",
+        "max_chars": (
+            "tope de caracteres a devolver (default 16000). Si el PDF es más "
+            "largo, se corta en un límite de página y se avisa cuántas páginas "
+            "quedaron sin incluir. Subilo si necesitás leer más de una vez."
+        ),
+        "start_page": (
+            "primera página a incluir, base 1 (default 1). Útil para leer un "
+            "PDF largo por tramos sin desbordar el contexto."
+        ),
     },
 )
-def read_pdf(path: str) -> str:
-    """Extraer texto de un .pdf, página por página."""
+def read_pdf(path: str, max_chars: int = _DEFAULT_MAX_CHARS, start_page: int = 1) -> str:
+    """Extraer texto de un .pdf, página por página (con tope de tamaño)."""
     pypdf = _require_pypdf()
     p = _validate_pdf_path_for_read(path)
 
@@ -100,25 +114,47 @@ def read_pdf(path: str) -> str:
             ) from e
 
     num_pages = len(reader.pages)
+    if start_page < 1:
+        start_page = 1
+
     lines: list[str] = [f"Archivo: {p}", f"Páginas: {num_pages}", ""]
 
     total_chars = 0
-    for idx, page in enumerate(reader.pages, start=1):
-        lines.append(f"--- Página {idx} ---")
+    rendered_chars = 0
+    stopped_at: int | None = None
+    for idx in range(start_page, num_pages + 1):
+        page = reader.pages[idx - 1]
         try:
-            text = page.extract_text() or ""
+            text = (page.extract_text() or "").strip()
         except Exception as e:  # noqa: BLE001
+            lines.append(f"--- Página {idx} ---")
             lines.append(f"(error extrayendo página: {e})")
+            lines.append("")
             continue
-        text = text.strip()
+
+        # Cortar en un límite de página si ya pasamos el presupuesto.
+        if max_chars and max_chars > 0 and rendered_chars >= max_chars and idx > start_page:
+            stopped_at = idx
+            break
+
+        lines.append(f"--- Página {idx} ---")
         if not text:
             lines.append("(página sin texto extraíble — puede ser imagen)")
         else:
             lines.append(text)
             total_chars += len(text)
+            rendered_chars += len(text)
         lines.append("")
 
-    if total_chars == 0 and num_pages > 0:
+    if stopped_at is not None:
+        lines.append(
+            f"[…TRUNCADO en la página {stopped_at}: el PDF tiene {num_pages} "
+            f"páginas y se incluyeron {start_page}..{stopped_at - 1}. Para leer "
+            f"el resto, volvé a llamar read_pdf con start_page={stopped_at} "
+            f"(o subí max_chars). Trabajá con lo mostrado si ya alcanza.]"
+        )
+
+    if total_chars == 0 and num_pages > 0 and stopped_at is None:
         lines.append(
             "(ATENCIÓN: no se extrajo texto de ninguna página. "
             "El PDF podría ser escaneado y requerir OCR.)"

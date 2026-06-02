@@ -4,6 +4,7 @@ Agente de terminal para asistir tareas del estudio. Diseñado para correr
 local (Ollama) o contra modelos cloud (Anthropic, OpenAI, Google) usando
 la misma interfaz.
 
+**Versión:** 0.2.0 (PPT, PDF, Excel)
 **Versión:** 0.1.0 (Local Agent Prototype)
 
 ---
@@ -78,12 +79,22 @@ La configuración mínima para correr local con Ollama:
 WSO_MODE=local
 WSO_LOCAL_URL=http://localhost:11434     # o IP de la PC con Ollama
 WSO_LOCAL_MODEL=qwen2.5-coder:14b
-WSO_LOCAL_NUM_CTX=4096                   # tamaño del contexto (KV cache)
+WSO_LOCAL_NUM_CTX=16384                  # tamaño del contexto (KV cache)
 ```
 
-`WSO_LOCAL_NUM_CTX` controla cuánta VRAM consume el KV cache. Con
-GPU de 16GB, 4096 deja todo en GPU; 8192 es más holgado pero usa
-más memoria. Bajalo si ves split CPU/GPU en `ollama ps`.
+`WSO_LOCAL_NUM_CTX` controla cuánta VRAM consume el KV cache (escala
+lineal con el contexto). El default es **16384**: da aire para tareas
+con lecturas grandes (resumir un PDF, armar un deck desde un docx). Con
+num_ctx chico (4096-8192) una sola lectura grande desaloja del contexto
+el system prompt y lo que pediste, y el modelo "olvida" la tarea a mitad
+de camino. Con un 14B en GPU de 16GB, 16384 entra cómodo (~13GB total).
+Si usás un 32B o GPU chica, bajalo a 8192/4096 para no spillear a CPU
+(mirá `ollama ps`: querés ver `100% GPU`).
+
+Complementariamente, las tools de lectura (`read_pdf`, `read_docx`,
+`read_pptx`) aceptan un `max_chars` (default 16000) que acota cada
+lectura a un tamaño predecible y avisa si el documento sigue. `read_pdf`
+además acepta `start_page` para leer PDFs largos por tramos.
 
 ### Cloud providers
 
@@ -129,25 +140,35 @@ OPENAI_API_KEY=sk-...
 pip install "openai>=1.50"
 ```
 
-### Tools de Office
+### Tools de Office y documentos
 
-Para generar/editar archivos `.pptx` y `.xlsx`, instalá la extra opcional:
+Para generar/editar `.pptx`/`.xlsx` y leer `.pdf`/`.docx`, instalá la
+extra opcional:
 
 ```bash
 pip install -e ".[office]"
-# o: pip install python-pptx openpyxl
+# o: pip install python-pptx openpyxl pypdf python-docx
 ```
 
-Sin esta extra, las tools de office siguen registradas pero fallan al
-invocarse con un mensaje guía pidiendo instalar la dep correspondiente.
-Las demás tools del agente (filesystem, flow) no se ven afectadas.
+Sin esta extra, las tools siguen registradas pero fallan al invocarse
+con un mensaje guía pidiendo instalar la dep correspondiente. Las demás
+tools del agente (filesystem, flow) no se ven afectadas.
 
-Tools disponibles en v0.2:
+Tools disponibles:
 
 - **PPTX**: `generate_pptx`, `read_pptx`, `edit_pptx_slide`,
   `generate_pptx_from_template`.
 - **XLSX**: `generate_xlsx`, `read_xlsx`, `edit_xlsx_cell`,
   `append_xlsx_rows`.
+- **Lectura de documentos**: `read_pdf` (extrae texto por página, con
+  `start_page`/`max_chars`) y `read_docx` (párrafos, headings y tablas).
+  Útiles para resumir, traducir o tomar contenido para un deck/Excel.
+
+Las tools de generación de PPTX toleran variaciones del JSON que emiten
+los modelos chicos: `layout` opcional (default `content`), `content`/
+`text` se coercionan a `bullets`, y el arg `slides` funciona como alias
+de `slides_json`. Esto reduce los errores de validación en vueltas con
+modelos locales.
 
 ### Logging estructurado de sesiones
 
@@ -230,12 +251,16 @@ logs/                  # audit trail de sesiones
 - [x] Clientes Anthropic, OpenAI, Google
 - [x] Soporte OpenAI-compatible endpoints (OpenRouter, Together.ai, etc)
 - [x] UI terminal con Rich
-- [x] 351 tests pasando (214 base + 49 de pptx + 57 de xlsx + 31 de logging en v0.2)
+- [x] 401 tests pasando
 
 **v2 (cerrado):**
 - [x] Tools de PowerPoint (`generate_pptx`, `read_pptx`, `edit_pptx_slide`, `generate_pptx_from_template`)
 - [x] Tools de Excel (`generate_xlsx`, `read_xlsx`, `edit_xlsx_cell`, `append_xlsx_rows`)
+- [x] Tools de lectura de documentos (`read_pdf`, `read_docx`)
 - [x] Logging estructurado a `logs/session_*.jsonl` (opt-in vía `WSO_LOG_ENABLED=true`)
+- [x] Robustez post-prueba 2: schema PPTX tolerante (layout opcional,
+      `content`→`bullets`, alias `slides`), guardrails de rutas/archivos en
+      el system prompt, `num_ctx` default 16384 y `max_chars` en lecturas
 
 **v3 (futuro):**
 - [ ] **Browser bridge mínimo** — el agente maneja tu Chrome real

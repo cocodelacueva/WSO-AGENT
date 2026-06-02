@@ -34,9 +34,18 @@ class Settings(BaseSettings):
     # --- Configuración local (Ollama) ---
     local_url: str = "http://localhost:11434"
     local_model: str = "qwen2.5-coder:32b"
-    local_num_ctx: int = 8192
-    """Tamaño del contexto en tokens. Reducirlo libera VRAM (KV cache).
-    8192 funciona bien para WSO; bajalo a 4096 si tu GPU tiene poca memoria."""
+    local_num_ctx: int = 16384
+    """Tamaño del contexto en tokens. Escala el KV cache (y la VRAM) linealmente.
+
+    Default 16384: da headroom para tareas con lecturas grandes (resumir un
+    PDF, armar un deck desde un docx). Con num_ctx chico (4096-8192) un solo
+    read grande desaloja del contexto el system prompt y lo que el usuario
+    pidió, y el modelo "olvida" la tarea a mitad de camino.
+
+    Ajustá según tu hardware:
+      - 14B en GPU de 16GB: 16384 entra cómodo (~13GB total).
+      - 32B o GPU chica: bajá a 8192/4096 para no spillear a CPU
+        (mirá `ollama ps`: querés ver `100% GPU`)."""
 
     # --- Configuración cloud ---
     cloud_provider: Literal["anthropic", "openai", "google"] | None = None

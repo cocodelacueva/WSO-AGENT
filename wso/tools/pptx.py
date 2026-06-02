@@ -51,7 +51,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from wso.tools.base import PermissionCategory, tool
+from wso.tools.base import PermissionCategory, tool, truncate_with_notice
 from wso.tools.pptx_schemas import (
     LAYOUT_INDEX,
     BlankSlide,
@@ -62,6 +62,9 @@ from wso.tools.pptx_schemas import (
     TitleSlide,
     TwoContentSlide,
 )
+
+# Tope default de caracteres por lectura (ver truncate_with_notice en base.py).
+_DEFAULT_MAX_CHARS = 16000
 
 # ---------------------------------------------------------------------------
 # Lazy import de python-pptx
@@ -259,24 +262,195 @@ def _apply_slide(prs: Any, slide_data: Any) -> None:
         raise TypeError(f"Tipo de slide no soportado: {type(slide_data).__name__}")
 
 
+# ---------------------------------------------------------------------------
+# Normalización tolerante de la estructura de slides
+# ---------------------------------------------------------------------------
+#
+# Los modelos (sobre todo los locales chicos) suelen emitir variaciones del
+# schema esperado: omiten `layout`, usan `content`/`text` en vez de `bullets`,
+# escriben `bullets` como un string, o usan sinónimos del layout. En vez de
+# devolver un ValidationError críptico de discriminated union, normalizamos
+# cada slide a la forma canónica antes de validar. Esto hace que la tool sea
+# robusta sin relajar el schema interno.
+
+_LAYOUT_SYNONYMS: dict[str, str] = {
+    # title
+    "titulo": "title",
+    "título": "title",
+    "portada": "title",
+    "cover": "title",
+    "title_slide": "title",
+    # content
+    "bullet": "content",
+    "bullets": "content",
+    "texto": "content",
+    "text": "content",
+    "body": "content",
+    "contenido": "content",
+    "title_and_content": "content",
+    # section_header
+    "section": "section_header",
+    "seccion": "section_header",
+    "sección": "section_header",
+    "divider": "section_header",
+    "header": "section_header",
+    # two_content
+    "two": "two_content",
+    "twocontent": "two_content",
+    "comparison": "two_content",
+    "comparativa": "two_content",
+    "dos_columnas": "two_content",
+    # image
+    "imagen": "image",
+    "picture": "image",
+    "photo": "image",
+    "foto": "image",
+    # blank
+    "vacio": "blank",
+    "vacío": "blank",
+    "empty": "blank",
+}
+
+_VALID_LAYOUTS = {
+    "title",
+    "content",
+    "section_header",
+    "two_content",
+    "image",
+    "blank",
+}
+
+# Campos que el modelo usa como "cuerpo" del slide cuando no emite `bullets`.
+_BODY_ALIASES = ("content", "text", "body", "points", "items", "puntos", "bullet")
+
+
+def _to_bullets(value: Any) -> list[str]:
+    """Coercionar un valor arbitrario a una lista de bullets (list[str])."""
+    if isinstance(value, list):
+        return [str(v).strip() for v in value if str(v).strip()]
+    if isinstance(value, str):
+        lines = [ln.strip() for ln in value.splitlines() if ln.strip()]
+        return lines if lines else ([value.strip()] if value.strip() else [])
+    if value is None:
+        return []
+    return [str(value)]
+
+
+def _join_text(value: Any) -> str:
+    """Coercionar un valor a un string (para subtitle)."""
+    if isinstance(value, list):
+        return "\n".join(str(v).strip() for v in value if str(v).strip())
+    return str(value) if value is not None else ""
+
+
+def _normalize_slide_dict(d: Any) -> Any:
+    """Normalizar un slide-dict crudo a la forma canónica del schema.
+
+    Tolera: layout ausente o con sinónimos, `content`/`text` en vez de
+    `bullets`, `bullets` como string. No toca slides que ya están bien.
+    Si el valor no es un dict, lo devuelve tal cual (Pydantic dará el error).
+    """
+    if not isinstance(d, dict):
+        return d
+
+    s = dict(d)
+
+    # 1. Normalizar el nombre del layout (lower + sinónimos)
+    layout = s.get("layout")
+    if isinstance(layout, str):
+        norm = layout.strip().lower()
+        layout = _LAYOUT_SYNONYMS.get(norm, norm)
+        s["layout"] = layout
+
+    # 2. Inferir layout si falta o es desconocido (antes de coercionar el body)
+    if layout not in _VALID_LAYOUTS:
+        if "image_path" in s:
+            layout = "image"
+        elif "left_bullets" in s or "right_bullets" in s:
+            layout = "two_content"
+        elif "subtitle" in s and not any(k in s for k in _BODY_ALIASES + ("bullets",)):
+            layout = "title"
+        else:
+            layout = "content"
+        s["layout"] = layout
+
+    # 3. Coercionar campos de cuerpo según el layout objetivo
+    if layout in ("title", "section_header"):
+        if "subtitle" not in s:
+            for k in ("content", "text", "body"):
+                if k in s:
+                    s["subtitle"] = _join_text(s.pop(k))
+                    break
+    elif layout == "content":
+        if "bullets" in s:
+            s["bullets"] = _to_bullets(s["bullets"])
+        else:
+            for k in _BODY_ALIASES:
+                if k in s:
+                    s["bullets"] = _to_bullets(s.pop(k))
+                    break
+    elif layout == "two_content":
+        for side in ("left_bullets", "right_bullets"):
+            if side in s:
+                s[side] = _to_bullets(s[side])
+
+    return s
+
+
 def _parse_slides_json(slides_json: str) -> SlideDeck:
     """Parsear y validar un JSON string contra el schema SlideDeck.
 
-    Acepta tanto un array JSON top-level (caso típico que emite el modelo)
-    como un objeto `{"slides": [...]}`.
+    Acepta:
+        - un array JSON top-level (caso típico que emite el modelo),
+        - un objeto `{"slides": [...]}`,
+        - un único slide-dict suelto (se envuelve en una lista de 1).
 
-    Errores se propagan: json.JSONDecodeError o pydantic.ValidationError.
+    Cada slide pasa por `_normalize_slide_dict` antes de validar, lo que
+    tolera layouts omitidos/sinónimos y `content`/`text` en vez de `bullets`.
+
+    Errores se propagan: json.JSONDecodeError o un ValueError con un mensaje
+    guía claro si la estructura sigue sin validar tras normalizar.
     """
     raw = json.loads(slides_json)
-    if isinstance(raw, list):
-        return SlideDeck(slides=raw)
+
     if isinstance(raw, dict) and "slides" in raw:
-        return SlideDeck.model_validate(raw)
-    raise ValueError(
-        "slides_json debe ser un array JSON de slides o un objeto "
-        '{"slides": [...]}, recibido: '
-        f"{type(raw).__name__}"
-    )
+        raw_slides = raw["slides"]
+    elif isinstance(raw, list):
+        raw_slides = raw
+    elif isinstance(raw, dict):
+        # Un slide suelto (tiene layout/title/etc): lo envolvemos.
+        raw_slides = [raw]
+    else:
+        raise ValueError(
+            "slides_json debe ser un array JSON de slides o un objeto "
+            '{"slides": [...]}, recibido: '
+            f"{type(raw).__name__}"
+        )
+
+    if not isinstance(raw_slides, list):
+        raise ValueError(
+            'slides_json: el campo "slides" debe ser una lista, recibido: '
+            f"{type(raw_slides).__name__}"
+        )
+
+    normalized = [_normalize_slide_dict(item) for item in raw_slides]
+
+    try:
+        return SlideDeck(slides=normalized)
+    except ValidationError as e:
+        raise ValueError(
+            "slides_json no validó. Cada slide debe ser un objeto con un campo "
+            '"layout" entre: title, content, section_header, two_content, image, '
+            "blank. Forma esperada por layout:\n"
+            '  {"layout":"title","title":"...","subtitle":"..."}\n'
+            '  {"layout":"content","title":"...","bullets":["...","..."]}\n'
+            '  {"layout":"section_header","title":"...","subtitle":"..."}\n'
+            '  {"layout":"two_content","title":"...","left_bullets":["..."],'
+            '"right_bullets":["..."]}\n'
+            '  {"layout":"image","title":"...","image_path":"/abs/ruta.png"}\n'
+            '  {"layout":"blank","title":"..."}\n'
+            f"Detalle: {e.errors()[0].get('msg', str(e)) if e.errors() else e}"
+        ) from e
 
 
 def _delete_all_slides(prs: Any) -> None:
@@ -324,6 +498,7 @@ def _delete_all_slides(prs: Any) -> None:
             '{"layout":"content","title":"Puntos","bullets":["a","b"]}]'
         ),
     },
+    aliases={"slides": "slides_json", "slides_xml": "slides_json"},
 )
 def generate_pptx(output_path: str, slides_json: str) -> str:
     """Crear un .pptx nuevo desde la estructura declarativa."""
@@ -366,10 +541,14 @@ def generate_pptx(output_path: str, slides_json: str) -> str:
     ),
     args_schema={
         "path": "ruta absoluta del archivo .pptx a leer",
+        "max_chars": (
+            "tope de caracteres a devolver (default 16000). Si el deck es muy "
+            "largo, se trunca y se avisa cuánto quedó afuera."
+        ),
     },
 )
-def read_pptx(path: str) -> str:
-    """Extraer texto de un .pptx, slide por slide."""
+def read_pptx(path: str, max_chars: int = _DEFAULT_MAX_CHARS) -> str:
+    """Extraer texto de un .pptx, slide por slide (con tope de tamaño)."""
     pptx = _require_pptx()
 
     p = _validate_pptx_path_for_read(path)
@@ -414,7 +593,13 @@ def read_pptx(path: str) -> str:
 
         lines.append("")
 
-    return "\n".join(lines).rstrip() + "\n"
+    text = "\n".join(lines).rstrip() + "\n"
+    return truncate_with_notice(
+        text,
+        max_chars,
+        what="el deck",
+        more_hint="Para el resto, volvé a leer con max_chars mayor.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -440,6 +625,7 @@ def read_pptx(path: str) -> str:
             'Ej: {"title": "Nuevo título", "bullets": ["a", "b"]}'
         ),
     },
+    aliases={"updates": "updates_json"},
 )
 def edit_pptx_slide(path: str, slide_index: int, updates_json: str) -> str:
     """Modificar un slide existente."""
@@ -542,6 +728,7 @@ def edit_pptx_slide(path: str, slide_index: int, updates_json: str) -> str:
             'Ej: [{"layout":"title","title":"Hola"}]'
         ),
     },
+    aliases={"slides": "slides_json", "slides_xml": "slides_json"},
 )
 def generate_pptx_from_template(
     template_path: str, output_path: str, slides_json: str

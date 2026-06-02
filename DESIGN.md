@@ -260,6 +260,56 @@ de campos individuales. Mitigado con un ejemplo claro en `args_schema`
 del decorador. El XML anidado real queda en el roadmap para v0.3 si
 algún caso lo necesita.
 
+### 3.17 Normalización tolerante del JSON de slides (post-prueba 2)
+
+La prueba 2 mostró que los modelos chicos (qwen2.5-coder:14b) fallan
+repetidamente contra el discriminated union de slides: omiten `layout`,
+usan `content`/`text` en vez de `bullets`, escriben `bullets` como string,
+o usan sinónimos del layout. Cada fallo gasta un step del budget y confunde
+al modelo (vimos 5 reintentos seguidos por el mismo slide).
+
+Decisión: **normalizar cada slide-dict a la forma canónica antes de validar**
+(`_normalize_slide_dict` en `pptx.py`), sin relajar el schema interno. Reglas:
+
+- `layout` ausente o desconocido → se infiere (image_path→image, left/right_
+  bullets→two_content, subtitle sin body→title, default→content).
+- sinónimos de layout (`portada`, `bullet`, `seccion`, …) → nombre canónico.
+- `content`/`text`/`body`/`points`/`items` → se mapean a `bullets` (o a
+  `subtitle` en layouts title/section).
+- `bullets` como string → se splitea por líneas; como lista → se stringifica.
+- un slide-dict suelto (no envuelto en lista) → se envuelve.
+
+Si tras normalizar sigue sin validar (ej: falta `title`, que no se puede
+inventar), se levanta un `ValueError` con un mensaje que muestra la forma
+esperada por layout — mucho más útil que el `union_tag_not_found` crudo de
+Pydantic. El schema canónico (`pptx_schemas.py`) queda intacto; toda la
+tolerancia vive en la capa de parsing.
+
+### 3.18 Aliases de args en el decorador `@tool`
+
+En la prueba 2 el modelo emitió `slides` en vez de `slides_json` y la tool
+falló con "Field required". Generalizamos una solución: `@tool` acepta un
+`aliases: dict[str, str]` (`alias → arg canónico`). `validate_and_call`
+remapea las claves antes de validar, sin pisar lo explícito (si vienen
+ambos, gana el canónico). Las tools de PPTX registran `slides`/`slides_xml`
+→ `slides_json` y `updates` → `updates_json`. El decorador valida en
+registro que cada alias apunte a un arg real y no colisione con uno.
+
+### 3.19 Cap de tamaño en las tools de lectura
+
+`read_pdf`/`read_docx`/`read_pptx` pueden devolver documentos enormes (en la
+prueba 2, un PDF de 26 páginas). Con `num_ctx` chico, una sola lectura
+desaloja del contexto el system prompt y la tarea, y el modelo termina
+generando un deck genérico que ignora lo leído. Mitigación en dos frentes:
+
+- `num_ctx` default subido a 16384 (decisión de config, ver README).
+- `max_chars` (default 16000) en las tres tools de lectura, vía el helper
+  `truncate_with_notice` (`base.py`): trunca a un tamaño predecible y agrega
+  un aviso visible de cuánto quedó afuera y cómo leer el resto. `read_pdf`
+  trunca en límite de página y expone `start_page` para leer por tramos.
+
+El aviso es clave: sin él, el modelo trata el texto truncado como completo.
+
 ---
 
 ## 4. Mapa de módulos
@@ -289,6 +339,8 @@ wso/
 │   ├── pptx_schemas.py           # Pydantic models de slides (discriminated union)
 │   ├── xlsx.py                   # generate_xlsx, read_xlsx, edit_xlsx_cell, append_xlsx_rows
 │   ├── xlsx_schemas.py           # Pydantic models de sheets/workbook
+│   ├── pdf.py                    # read_pdf (texto por página, start_page/max_chars)
+│   ├── docx.py                   # read_docx (párrafos, headings, tablas, max_chars)
 │   └── code.py                   # run_python (stub — implementación en v0.3)
 ├── permissions/
 │   ├── manager.py                # PermissionManager + AlwaysAllowRule
@@ -343,8 +395,8 @@ respuestas). El factory despacha según `WSO_MODE` y
 
 **`tools/registry.py`** — `ToolRegistry` que escanea módulos buscando
 funciones con `_tool_def` adjunto. `load_builtin_tools()` importa
-`filesystem`, `flow`, `pptx` y `xlsx`, y devuelve un registry poblado
-con 14 tools.
+`filesystem`, `flow`, `pptx`, `xlsx`, `pdf` y `docx`, y devuelve un
+registry poblado con 16 tools.
 
 **`tools/pptx.py`** — Cuatro tools declarativas sobre `python-pptx`:
 `generate_pptx` (crear desde JSON), `read_pptx` (extraer texto y notas),
@@ -573,30 +625,34 @@ flushea con un `ParseError` si quedó algo abierto.
 
 ## 8. Tests
 
-**351 tests passing**, distribuidos:
+**401 tests passing**, distribuidos:
 
 | Archivo                                | Tests | Cobertura                                                |
 |----------------------------------------|-------|----------------------------------------------------------|
-| `test_tools_base.py`                   | 15    | Decorador `@tool`, validación, `to_prompt_section`       |
+| `test_tools_base.py`                   | 23    | Decorador `@tool`, validación, aliases, `truncate_with_notice` |
 | `test_tools_registry.py`               | 11    | Registro, escaneo de módulos, `load_builtin_tools`       |
-| `test_tools_filesystem.py`             | 21    | read/write/delete/list con tmp_path, edge cases          |
+| `test_tools_filesystem.py`             | 20    | read/write/delete/list con tmp_path, edge cases          |
 | `test_tools_flow.py`                   | 11    | responder/preguntar, parsing de opciones, JSON           |
-| `test_tools_pptx.py`                   | 46    | Schemas, generate/read/edit/from_template, errores       |
+| `test_tools_pptx.py`                   | 55    | Schemas, normalización tolerante, generate/read/edit/template |
 | `test_tools_xlsx.py`                   | 57    | Schemas, generate/read/edit/append, errores              |
+| `test_tools_pdf.py`                    | 14    | read_pdf, validación de path, start_page, truncado       |
+| `test_tools_docx.py`                   | 18    | read_docx, párrafos/headings/tablas, max_chars           |
 | `test_session_log.py`                  | 25    | Logger JSONL, encoding, lazy file open, manejo I/O       |
-| `test_agent_parser.py`                 | 42    | Parser streaming, partials, recovery, determinismo       |
-| `test_permissions_manager.py`          | 17    | Reglas, whitelist, sticky, persistencia TOML             |
-| `test_permissions_prompts.py`          | 28    | parse codes, panel rendering, ask_approval               |
-| `test_agent_prompts.py`                | 13    | System prompt builder, load_context_files                |
-| `test_agent_budget.py`                 | 26    | Tracker, parse continuation, panel, ask                  |
+| `test_agent_parser.py`                 | 45    | Parser streaming, partials, recovery, determinismo       |
+| `test_permissions_manager.py`          | 21    | Reglas, whitelist, sticky, persistencia TOML             |
+| `test_permissions_prompts.py`          | 24    | parse codes, panel rendering, ask_approval               |
+| `test_agent_prompts.py`                | 15    | System prompt builder, guardrails, load_context_files    |
+| `test_agent_budget.py`                 | 28    | Tracker, parse continuation, panel, ask                  |
 | `test_ui_console.py`                   | 17    | Cada render method, truncation, panels                   |
 | `test_agent_loop.py`                   | 17    | Integración: turnos completos + emisión de eventos al log|
-| **Total**                              | **351** |                                                        |
+| **Total**                              | **401** |                                                        |
 
-Los tests de `test_tools_pptx.py` y `test_tools_xlsx.py` se skipean
-automáticamente si `python-pptx` / `openpyxl` no están instalados
+Los tests de `test_tools_pptx.py`, `test_tools_xlsx.py`, `test_tools_pdf.py`
+y `test_tools_docx.py` se skipean automáticamente si su dep
+(`python-pptx`/`openpyxl`/`pypdf`/`python-docx`) no está instalada
 (`pytest.importorskip`), así que la suite sigue corriendo en setups
-mínimos sin la extra `[office]`.
+mínimos sin la extra `[office]`. Los tests de texto de `read_pdf` usan
+`reportlab` (extra `[dev]`) para generar PDFs con texto extraíble.
 
 ### Estrategia
 

@@ -157,3 +157,32 @@ class TestReadPdfRegistration:
         registry = load_builtin_tools()
         section = registry.to_prompt_section()
         assert "## read_pdf" in section
+
+
+class TestReadPdfPaging:
+    """start_page y max_chars: leer PDFs largos por tramos sin desbordar."""
+
+    def test_start_page_skips_earlier_pages(self, tmp_path: Path) -> None:
+        # Blank pages alcanzan: verificamos qué headers de página aparecen.
+        pdf = _make_simple_pdf(tmp_path / "p.pdf", ["a", "b", "c", "d"])
+        out = read_pdf(str(pdf), start_page=3)
+        assert "--- Página 1 ---" not in out
+        assert "--- Página 2 ---" not in out
+        assert "--- Página 3 ---" in out
+        assert "--- Página 4 ---" in out
+
+    def test_truncates_long_pdf_and_signals_next_page(self, tmp_path: Path) -> None:
+        # Necesita texto real extraíble (reportlab); si no, skip.
+        pages = [("Página " + str(i) + " ") + ("X" * 5000) for i in range(1, 6)]
+        pdf = _make_pdf_with_text(tmp_path / "long.pdf", pages)
+        out = read_pdf(str(pdf), max_chars=6000)
+        assert "TRUNCADO en la página" in out
+        # Debe sugerir cómo seguir leyendo.
+        assert "start_page=" in out
+
+    def test_high_max_chars_reads_everything(self, tmp_path: Path) -> None:
+        pages = ["contenido corto " + str(i) for i in range(1, 4)]
+        pdf = _make_pdf_with_text(tmp_path / "short.pdf", pages)
+        out = read_pdf(str(pdf), max_chars=100000)
+        assert "TRUNCADO" not in out
+        assert "--- Página 3 ---" in out

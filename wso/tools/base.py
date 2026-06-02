@@ -95,8 +95,26 @@ class ToolDefinition:
     args_schema: dict[str, str] = field(default_factory=dict)
     """Descripciones humanas de cada arg (para el system prompt)."""
 
+    aliases: dict[str, str] = field(default_factory=dict)
+    """Mapeo `alias -> arg canónico`. Tolera que el modelo use otro nombre.
+
+    Ej: `{"slides": "slides_json"}` hace que una tool call con `slides`
+    se interprete como `slides_json`. Solo se aplica si el arg canónico
+    no vino ya provisto (lo explícito gana sobre el alias).
+    """
+
     pydantic_model: type[BaseModel] = field(repr=False, default=BaseModel)
     """Modelo Pydantic auto-derivado de la signature, para validación runtime."""
+
+    def _apply_aliases(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Remapear claves alias a su arg canónico (sin pisar lo explícito)."""
+        if not self.aliases:
+            return args
+        remapped = dict(args)
+        for alias, canonical in self.aliases.items():
+            if alias in remapped and canonical not in remapped:
+                remapped[canonical] = remapped.pop(alias)
+        return remapped
 
     def validate_and_call(self, args: dict[str, Any]) -> Any:
         """Validar los args contra el schema y ejecutar el handler.
@@ -111,6 +129,7 @@ class ToolDefinition:
         Raises:
             ToolValidationError: si los args no matchean el schema.
         """
+        args = self._apply_aliases(args)
         try:
             validated = self.pydantic_model(**args)
         except ValidationError as e:
@@ -181,6 +200,7 @@ def tool(
     category: PermissionCategory,
     description: str,
     args_schema: dict[str, str] | None = None,
+    aliases: dict[str, str] | None = None,
 ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
     """Decorador para declarar una tool del agente.
 
@@ -207,11 +227,15 @@ def tool(
             provee, sus claves DEBEN coincidir exactamente con los args
             de la función. Si no se provee, se genera con descripciones
             vacías (la tool funciona, pero el prompt es menos descriptivo).
+        aliases: Mapeo opcional `alias -> arg canónico`. Tolera que el
+            modelo emita un nombre de arg alternativo (ej: `slides` por
+            `slides_json`). Cada valor (arg canónico) DEBE existir en la
+            signature; cada clave (alias) NO debe colisionar con un arg real.
 
     Raises:
         TypeError: si la función tiene args sin type hint, o usa
             `*args`/`**kwargs` (las tools requieren args explícitos).
-        ValueError: si `args_schema` no coincide con la signature.
+        ValueError: si `args_schema` o `aliases` no coinciden con la signature.
     """
 
     def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
@@ -250,6 +274,25 @@ def tool(
                 raise ValueError(" ".join(msg_parts))
             resolved_schema = dict(args_schema)
 
+        # 2b. Validar aliases contra la signature
+        resolved_aliases = dict(aliases) if aliases else {}
+        if resolved_aliases:
+            sig_keys = set(sig_args)
+            bad_targets = {
+                a: c for a, c in resolved_aliases.items() if c not in sig_keys
+            }
+            if bad_targets:
+                raise ValueError(
+                    f"Tool {name!r}: aliases apuntan a args inexistentes: "
+                    f"{bad_targets}. Args válidos: {sorted(sig_keys)}."
+                )
+            clashing = sorted(set(resolved_aliases) & sig_keys)
+            if clashing:
+                raise ValueError(
+                    f"Tool {name!r}: estos aliases colisionan con args reales: "
+                    f"{clashing}. Un alias no puede llamarse igual que un arg."
+                )
+
         # 3. Construir el Pydantic model dinámicamente
         fields: dict[str, tuple[Any, Any]] = {}
         for arg_name, param in sig.parameters.items():
@@ -264,6 +307,7 @@ def tool(
             category=category,
             handler=func,
             args_schema=resolved_schema,
+            aliases=resolved_aliases,
             pydantic_model=pydantic_model,
         )
         func._tool_def = definition  # type: ignore[attr-defined]
@@ -275,6 +319,45 @@ def tool(
 # ---------------------------------------------------------------------------
 # Helpers internos
 # ---------------------------------------------------------------------------
+
+
+def truncate_with_notice(
+    text: str,
+    max_chars: int | None,
+    *,
+    what: str = "contenido",
+    more_hint: str = "",
+) -> str:
+    """Truncar `text` a `max_chars` agregando un aviso claro al final.
+
+    Las tools de lectura (read_pdf, read_docx, read_pptx) pueden devolver
+    documentos enormes. En modelos locales con `num_ctx` chico, un solo read
+    gigante desaloja del contexto todo lo anterior (el system prompt, lo que
+    el usuario pidió, lecturas previas), y el modelo "olvida" la tarea. Este
+    cap acota cada lectura a un tamaño predecible y le avisa explícitamente
+    al modelo que el contenido sigue, para que no lo trate como completo.
+
+    Args:
+        text: Texto completo a (posiblemente) truncar.
+        max_chars: Tope de caracteres. Si es None o <= 0, no trunca.
+        what: Qué se está truncando (para el mensaje, ej "el PDF").
+        more_hint: Sugerencia extra sobre cómo obtener el resto.
+
+    Returns:
+        El texto original si entra; o el head truncado + un aviso visible.
+    """
+    if not max_chars or max_chars <= 0 or len(text) <= max_chars:
+        return text
+    head = text[:max_chars].rstrip()
+    omitted = len(text) - len(head)
+    notice = (
+        f"\n\n[…TRUNCADO: se omitieron ~{omitted} caracteres de {what}. "
+        f"Mostrados {len(head)} de {len(text)}."
+    )
+    if more_hint:
+        notice += " " + more_hint
+    notice += " Trabajá con lo mostrado o volvé a leer acotando el rango.]"
+    return head + notice
 
 
 def _format_type(annotation: Any) -> str:

@@ -20,7 +20,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from wso.tools.base import PermissionCategory, tool
+from wso.tools.base import PermissionCategory, tool, truncate_with_notice
+
+# Tope default de caracteres por lectura (ver truncate_with_notice en base.py).
+_DEFAULT_MAX_CHARS = 16000
 
 
 # ---------------------------------------------------------------------------
@@ -92,10 +95,15 @@ def _heading_level(style_name: str | None) -> int:
     ),
     args_schema={
         "path": "ruta absoluta del archivo .docx a leer",
+        "max_chars": (
+            "tope de caracteres a devolver (default 16000). Si el documento es "
+            "más largo, se trunca y se avisa cuánto quedó afuera. Subilo si "
+            "necesitás el documento completo."
+        ),
     },
 )
-def read_docx(path: str) -> str:
-    """Extraer texto de un .docx en formato markdown-ish."""
+def read_docx(path: str, max_chars: int = _DEFAULT_MAX_CHARS) -> str:
+    """Extraer texto de un .docx en formato markdown-ish (con tope de tamaño)."""
     docx_lib = _require_docx()
     p = _validate_docx_path_for_read(path)
 
@@ -148,4 +156,9 @@ def read_docx(path: str) -> str:
 
     # Strip trailing whitespace y normalizar dobles blanks
     text = "\n".join(lines).rstrip() + "\n"
-    return text
+    return truncate_with_notice(
+        text,
+        max_chars,
+        what="el documento",
+        more_hint="Para el resto, volvé a leer con max_chars mayor.",
+    )

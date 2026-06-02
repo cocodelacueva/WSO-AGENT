@@ -234,3 +234,23 @@ class TestReadDocxRegistration:
         registry = load_builtin_tools()
         section = registry.to_prompt_section()
         assert "## read_docx" in section
+
+
+class TestReadDocxMaxChars:
+    """max_chars: acotar el tamaño de la lectura para no desbordar contexto."""
+
+    def test_long_docx_truncated_with_notice(self, tmp_path: Path) -> None:
+        paras = [("Párrafo " + str(i) + " " + "Z" * 400, None) for i in range(40)]
+        docx_path = _make_simple_docx(tmp_path / "long.docx", paras)
+        out = read_docx(str(docx_path), max_chars=2000)
+        assert "TRUNCADO" in out
+        assert "max_chars" in out
+        assert len(out) < 3000
+
+    def test_short_docx_not_truncated(self, tmp_path: Path) -> None:
+        docx_path = _make_simple_docx(
+            tmp_path / "short.docx", [("Hola mundo", None)]
+        )
+        out = read_docx(str(docx_path), max_chars=10000)
+        assert "TRUNCADO" not in out
+        assert "Hola mundo" in out

@@ -26,6 +26,8 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.5",
     "mypy>=1.10",
+    # reportlab: genera PDFs con texto extraíble para los tests de read_pdf.
+    "reportlab>=4.0",
 ]
 # Cloud providers (instalá solo el que vayas a usar)
 google = ["google-generativeai>=0.8"]
@@ -45,6 +47,7 @@ all = [
     "pytest-asyncio>=0.23",
     "ruff>=0.5",
     "mypy>=1.10",
+    "reportlab>=4.0",
     "python-pptx>=1.0",
     "openpyxl>=3.1",
     "pypdf>=4.0",

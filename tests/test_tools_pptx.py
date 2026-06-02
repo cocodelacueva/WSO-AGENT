@@ -25,6 +25,7 @@ pptx = pytest.importorskip("pptx")
 from pydantic import ValidationError  # noqa: E402
 
 from wso.tools.pptx import (  # noqa: E402
+    _parse_slides_json,
     edit_pptx_slide,
     generate_pptx,
     generate_pptx_from_template,
@@ -248,19 +249,25 @@ class TestGeneratePptx:
             generate_pptx(str(tmp_path / "x.pptx"), "{ not valid json")
 
     def test_invalid_schema_raises(self, tmp_path: Path) -> None:
-        # Falta el campo 'title' requerido para layout 'content'
-        with pytest.raises(ValidationError):
+        # Falta el campo 'title' requerido para layout 'content'. La
+        # normalización no puede inventarlo, así que se levanta un ValueError
+        # con un mensaje guía (en vez del ValidationError crudo de pydantic).
+        with pytest.raises(ValueError, match="layout"):
             generate_pptx(
                 str(tmp_path / "x.pptx"),
                 json.dumps([{"layout": "content"}]),
             )
 
-    def test_unknown_layout_raises(self, tmp_path: Path) -> None:
-        with pytest.raises(ValidationError):
-            generate_pptx(
-                str(tmp_path / "x.pptx"),
-                json.dumps([{"layout": "carousel", "title": "X"}]),
-            )
+    def test_unknown_layout_coerced_to_content(self, tmp_path: Path) -> None:
+        # Un layout desconocido ya no explota: se infiere uno razonable
+        # (content, porque tiene title y nada que sugiera otra cosa).
+        target = tmp_path / "x.pptx"
+        result = generate_pptx(
+            str(target),
+            json.dumps([{"layout": "carousel", "title": "X"}]),
+        )
+        assert "Generado" in result
+        assert target.exists()
 
     def test_missing_image_raises(self, tmp_path: Path) -> None:
         slides = [
@@ -531,3 +538,96 @@ class TestGenerateFromTemplate:
             generate_pptx_from_template(
                 str(template), str(tmp_path / "out.pptx"), "{ broken"
             )
+
+
+# ---------------------------------------------------------------------------
+# Normalización tolerante de slides (robustez frente a modelos chicos)
+# ---------------------------------------------------------------------------
+
+
+class TestSlideNormalization:
+    """El parser de slides debe tolerar las variaciones que emiten los
+    modelos locales: layout omitido, `content` en vez de `bullets`,
+    sinónimos de layout, bullets como string, un slide suelto, etc.
+
+    Reproduce los modos de falla observados en los logs de la prueba 2.
+    """
+
+    def test_missing_layout_with_content_string(self) -> None:
+        # Lo que emitió el modelo local: sin layout, con `content` string.
+        deck = _parse_slides_json(
+            json.dumps([{"title": "Intro", "content": "Una presentación."}])
+        )
+        assert len(deck.slides) == 1
+        slide = deck.slides[0]
+        assert isinstance(slide, ContentSlide)
+        assert slide.title == "Intro"
+        assert slide.bullets == ["Una presentación."]
+
+    def test_content_as_list_becomes_bullets(self) -> None:
+        deck = _parse_slides_json(
+            json.dumps([{"title": "X", "content": ["a", "b", "c"]}])
+        )
+        assert deck.slides[0].bullets == ["a", "b", "c"]
+
+    def test_bullets_as_string_splits_on_newlines(self) -> None:
+        deck = _parse_slides_json(
+            json.dumps([{"layout": "content", "title": "Y", "bullets": "l1\nl2"}])
+        )
+        assert deck.slides[0].bullets == ["l1", "l2"]
+
+    def test_layout_synonym_is_normalized(self) -> None:
+        deck = _parse_slides_json(
+            json.dumps([{"layout": "Portada", "title": "C", "subtitle": "2026"}])
+        )
+        assert isinstance(deck.slides[0], TitleSlide)
+        assert deck.slides[0].subtitle == "2026"
+
+    def test_single_slide_dict_is_wrapped(self) -> None:
+        deck = _parse_slides_json(json.dumps({"layout": "blank", "title": "Solo"}))
+        assert len(deck.slides) == 1
+        assert isinstance(deck.slides[0], BlankSlide)
+
+    def test_slides_wrapper_object(self) -> None:
+        deck = _parse_slides_json(
+            json.dumps({"slides": [{"layout": "content", "title": "T", "content": "c"}]})
+        )
+        assert deck.slides[0].bullets == ["c"]
+
+    def test_two_content_string_sides_coerced(self) -> None:
+        deck = _parse_slides_json(
+            json.dumps(
+                [
+                    {
+                        "layout": "two_content",
+                        "title": "Cmp",
+                        "left_bullets": "a\nb",
+                        "right_bullets": ["c"],
+                    }
+                ]
+            )
+        )
+        slide = deck.slides[0]
+        assert isinstance(slide, TwoContentSlide)
+        assert slide.left_bullets == ["a", "b"]
+        assert slide.right_bullets == ["c"]
+
+    def test_missing_title_raises_guided_valueerror(self) -> None:
+        # No se puede inventar el título: error claro, no ValidationError crudo.
+        with pytest.raises(ValueError, match="layout"):
+            _parse_slides_json(json.dumps([{"layout": "content"}]))
+
+    def test_normalized_deck_generates_file(self, tmp_path: Path) -> None:
+        # End-to-end: la estructura "sucia" del modelo produce un .pptx real.
+        target = tmp_path / "deck.pptx"
+        result = generate_pptx(
+            str(target),
+            json.dumps(
+                [
+                    {"title": "Portada", "subtitle": "2026", "layout": "title"},
+                    {"title": "Puntos", "content": "uno\ndos\ntres"},
+                ]
+            ),
+        )
+        assert target.exists()
+        assert "2 slides" in result
