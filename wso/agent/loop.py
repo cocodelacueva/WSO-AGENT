@@ -39,6 +39,7 @@ from wso.agent.parser import (
     ThinkingEnd,
     ToolCallComplete,
 )
+from wso.history_store import HistoryStore
 from wso.permissions.manager import PermissionDecision, PermissionManager
 from wso.permissions.prompts import ApprovalChoice, ask_approval
 from wso.session_log import SessionLogger
@@ -70,6 +71,10 @@ class AgentLoop:
     session_log: SessionLogger = field(
         default_factory=lambda: SessionLogger(log_dir=None)
     )
+    history_store: HistoryStore = field(
+        default_factory=lambda: HistoryStore(path=None)
+    )
+    """Persistencia del historial entre sesiones. No-op por default."""
     _turn_count: int = field(default=0, init=False, repr=False)
     _turn_started_monotonic: float = field(default=0.0, init=False, repr=False)
     _session_started_monotonic: float = field(default=0.0, init=False, repr=False)
@@ -106,6 +111,11 @@ class AgentLoop:
                 if not user_input:
                     continue
 
+                # Comando para olvidar el historial (persistido y en memoria).
+                if user_input.lower() in ("/reset", "/olvidar"):
+                    self._reset_history()
+                    continue
+
                 self.renderer.render_separator()
 
                 try:
@@ -128,6 +138,13 @@ class AgentLoop:
                 duration_ms=int((time.monotonic() - self._session_started_monotonic) * 1000),
             )
             self.session_log.close()
+
+    def _reset_history(self) -> None:
+        """Olvidar el historial: en memoria y el persistido en disco."""
+        self.history.clear()
+        self.history_store.clear()
+        self.session_log.log("history_reset")
+        self.renderer.render_info("Historial borrado. Empezamos de cero.")
 
     async def execute_turn(self, user_input: str) -> None:
         """Ejecutar un turno completo desde un input del usuario.
@@ -177,6 +194,8 @@ class AgentLoop:
                 steps=len(self.budget.history),
                 duration_ms=int((time.monotonic() - self._turn_started_monotonic) * 1000),
             )
+            # Persistir el historial tras cada turno (no-op si está deshabilitado).
+            self.history_store.save(self.history)
 
     # ---- Loop interno: un paso ----
 

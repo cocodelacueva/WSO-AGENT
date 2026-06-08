@@ -803,11 +803,26 @@ credenciales.
       (sin auto-aprobación) como control real. Se descartaron RestrictedPython
       (frágil) y WASM (sobredimensionado, sin acceso al FS del usuario).
       Política de imports: stdlib completa, sin red.
-- [ ] Persistencia de historial entre sesiones
-- [ ] Memoria de largo plazo (RAG sobre `/context`)
-- [ ] Modo no-conversacional para batch jobs
-- [ ] Tools async (HTTP, base de datos)
-- [ ] Editar args antes de aprobar (en lugar de solo y/n)
+- [x] Persistencia de historial entre sesiones (`wso/history_store.py`).
+      Opt-in vía `WSO_HISTORY_PERSIST`. Guarda el historial (user/assistant,
+      sin system prompt) tras cada turno y lo restaura al arrancar. Escritura
+      atómica (tmp+replace), cap de mensajes, no-op por default. Comando
+      `/reset` en el REPL para empezar de cero.
+
+### v0.4 (futuro)
+
+- [ ] **E2E manual del browser + endurecimiento** — correr `wso` real contra
+      LinkedIn/Sales Navigator (leer/resumir posts), más stealth, delays
+      randomizados y detección de session expiry / pantallas de login a nivel
+      del loop. Cierra lo pendiente del browser bridge (Apéndice A.10).
+- [ ] Memoria de largo plazo (RAG sobre `/context`) — embeddings + store +
+      retrieval, para no cargar todo el contexto siempre.
+- [ ] Modo no-conversacional para batch jobs (`wso --task "..."`), habilita
+      scheduling y automatizaciones.
+- [ ] Tools async (HTTP, base de datos) — y resolver el contrato async que ya
+      asomó con el worker thread del browser (A.6).
+- [ ] Editar args antes de aprobar (en lugar de solo y/n) en el prompt de
+      permiso.
 
 ---
 

@@ -20,6 +20,7 @@ from wso.agent.loop import AgentLoop
 from wso.agent.model.factory import build_model_client
 from wso.agent.prompts import build_system_prompt, load_context_files
 from wso.config import settings
+from wso.history_store import HistoryStore
 from wso.permissions.manager import PermissionManager
 from wso.session_log import SessionLogger
 from wso.tools.registry import load_builtin_tools
@@ -86,6 +87,19 @@ async def _run(console: Console) -> int:
     if session_log.enabled:
         renderer.render_info(f"Logging habilitado: {session_log.path}")
 
+    # Persistencia de historial (opt-in via WSO_HISTORY_PERSIST). Si está
+    # deshabilitada, el store es no-op y no toca el disco.
+    history_store = HistoryStore(
+        path=settings.history_file if settings.history_persist else None,
+        max_messages=settings.history_max_messages,
+    )
+    restored = history_store.load()
+    if restored:
+        renderer.render_info(
+            f"Restauré {len(restored)} mensajes de la sesión anterior "
+            f"(escribí /reset para empezar de cero)."
+        )
+
     # Construir y arrancar el loop
     loop = AgentLoop(
         model=model,
@@ -94,6 +108,8 @@ async def _run(console: Console) -> int:
         renderer=renderer,
         system_prompt=system_prompt,
         session_log=session_log,
+        history=restored,
+        history_store=history_store,
     )
 
     await loop.run_repl()

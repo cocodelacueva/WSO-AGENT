@@ -232,6 +232,22 @@ WSO_RUN_PYTHON_MAX_MEMORY_MB=512    # RLIMIT_AS en Linux
 WSO_RUN_PYTHON_MAX_OUTPUT_CHARS=16000
 ```
 
+### Persistencia de historial entre sesiones
+
+Por default, cada vez que abrís `wso` arranca sin memoria de la sesión
+anterior. Activando el flag, la conversación se guarda tras cada turno y
+se restaura al reabrir:
+
+```env
+WSO_HISTORY_PERSIST=true
+WSO_HISTORY_MAX_MESSAGES=200    # se conservan los últimos N mensajes
+```
+
+Se persisten solo los mensajes user/assistant (el system prompt se
+reconstruye en cada arranque). El archivo (`.wso_history.json`) usa
+escritura atómica y está en `.gitignore`. En el REPL, el comando
+`/reset` (o `/olvidar`) borra el historial guardado y empieza de cero.
+
 ### Logging estructurado de sesiones
 
 Para activar logging de cada sesión, configurá en `.env`:
@@ -341,6 +357,16 @@ logs/                  # audit trail de sesiones
 - [x] **`run_python`** — escape hatch del patrón híbrido: el modelo escribe
       Python y se ejecuta en un subprocess contenido (aislado, cwd
       `workspace/run`, timeout, sin red, gateado por permiso EXECUTE).
+- [x] **Persistencia de historial entre sesiones** — opt-in vía
+      `WSO_HISTORY_PERSIST`. Restaura la conversación al reabrir `wso`;
+      `/reset` para empezar de cero.
+
+**v4 (futuro):**
+- [ ] E2E manual del browser + endurecimiento (stealth, delays, session expiry).
+- [ ] Memoria de largo plazo (RAG sobre `/context`).
+- [ ] Modo no-conversacional para batch jobs (`wso --task "..."`).
+- [ ] Tools async (HTTP, base de datos).
+- [ ] Editar args antes de aprobar (en lugar de solo y/n).
 - [ ] `run_python` con sandbox (subprocess aislado + cwd limitado + timeout)
 - [ ] Persistencia de historial entre sesiones
 - [ ] Memoria de largo plazo (RAG sobre `/context`)

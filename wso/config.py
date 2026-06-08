@@ -102,6 +102,11 @@ class Settings(BaseSettings):
     def logs_dir(self) -> Path:
         return PROJECT_ROOT / "logs"
 
+    @property
+    def history_file(self) -> Path:
+        """Archivo donde se persiste el historial entre sesiones."""
+        return PROJECT_ROOT / ".wso_history.json"
+
     # --- Constantes del loop ---
     step_budget: int = 10
     """Cantidad máxima de tool calls antes de pedir continuación."""
@@ -117,6 +122,17 @@ class Settings(BaseSettings):
 
     run_python_max_output_chars: int = 16000
     """Tope de caracteres de stdout/stderr devueltos (trunca con aviso)."""
+
+    # --- Persistencia de historial ---
+    history_persist: bool = False
+    """Si True, el historial de la conversación se guarda tras cada turno y
+    se restaura al arrancar `wso`, dando continuidad entre sesiones. Default
+    off (igual que el logging): no toca disco si no lo pedís. El comando
+    `/reset` en el REPL borra el historial guardado."""
+
+    history_max_messages: int = 200
+    """Tope de mensajes guardados/restaurados. Acota el archivo y evita que
+    el contexto crezca sin límite entre sesiones (se conservan los últimos N)."""
 
     # --- Logging estructurado ---
     log_enabled: bool = False
