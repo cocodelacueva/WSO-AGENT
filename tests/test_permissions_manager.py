@@ -323,3 +323,118 @@ class TestAlwaysAllowRule:
     def test_pattern_set_but_no_path_arg_does_not_match(self) -> None:
         rule = AlwaysAllowRule(tool="ping", path_pattern="/*")
         assert not rule.matches("ping", {"other": "value"})
+
+
+# ---------------------------------------------------------------------------
+# Browser sticky (v0.3)
+# ---------------------------------------------------------------------------
+
+
+class TestBrowserSticky:
+    def test_browser_nav_needs_approval_initially(
+        self, manager: PermissionManager, registry
+    ) -> None:
+        decision = manager.check(
+            registry.get("browser_navigate"),
+            {"url": "https://www.linkedin.com/sales/"},
+        )
+        assert decision == PermissionDecision.NEEDS_APPROVAL
+
+    def test_remember_browser_session_approves_same_domain(
+        self, manager: PermissionManager, registry
+    ) -> None:
+        manager.remember_browser_session(
+            "browser_navigate", {"url": "https://www.linkedin.com/sales/home"}
+        )
+        # Otra URL del mismo dominio (sin www) → auto
+        decision = manager.check(
+            registry.get("browser_navigate"),
+            {"url": "https://linkedin.com/sales/lead/123"},
+        )
+        assert decision == PermissionDecision.AUTO_APPROVED
+
+    def test_browser_sticky_covers_subdomains(
+        self, manager: PermissionManager, registry
+    ) -> None:
+        manager.remember_browser_session(
+            "browser_navigate", {"url": "https://linkedin.com/feed"}
+        )
+        decision = manager.check(
+            registry.get("browser_navigate"),
+            {"url": "https://www.linkedin.com/in/someone"},
+        )
+        assert decision == PermissionDecision.AUTO_APPROVED
+
+    def test_open_tab_and_navigate_share_group(
+        self, manager: PermissionManager, registry
+    ) -> None:
+        # Aprobar open_tab a un dominio cubre navigate al mismo dominio
+        manager.remember_browser_session(
+            "browser_open_tab", {"url": "https://example.com/a"}
+        )
+        decision = manager.check(
+            registry.get("browser_navigate"), {"url": "https://example.com/b"}
+        )
+        assert decision == PermissionDecision.AUTO_APPROVED
+
+    def test_browser_sticky_does_not_leak_to_other_domain(
+        self, manager: PermissionManager, registry
+    ) -> None:
+        manager.remember_browser_session(
+            "browser_navigate", {"url": "https://linkedin.com/sales/"}
+        )
+        decision = manager.check(
+            registry.get("browser_navigate"), {"url": "https://evil.com/"}
+        )
+        assert decision == PermissionDecision.NEEDS_APPROVAL
+
+    def test_browser_action_without_url_needs_approval(
+        self, manager: PermissionManager, registry
+    ) -> None:
+        # click no tiene url: aun con sticky de un dominio, sigue pidiendo aprobación
+        manager.remember_browser_session(
+            "browser_navigate", {"url": "https://linkedin.com/"}
+        )
+        decision = manager.check(
+            registry.get("browser_click"), {"selector": "button.connect"}
+        )
+        assert decision == PermissionDecision.NEEDS_APPROVAL
+
+    def test_remember_browser_session_action_falls_back_to_exact_args(
+        self, manager: PermissionManager, registry
+    ) -> None:
+        args = {"selector": "button.connect"}
+        manager.remember_browser_session("browser_click", args)
+        # Mismo selector → auto (exact-args session)
+        assert (
+            manager.check(registry.get("browser_click"), args)
+            == PermissionDecision.AUTO_APPROVED
+        )
+        # Otro selector → sigue pidiendo
+        assert (
+            manager.check(registry.get("browser_click"), {"selector": ".other"})
+            == PermissionDecision.NEEDS_APPROVAL
+        )
+
+    def test_browser_sticky_does_not_persist_across_managers(
+        self, manager: PermissionManager, registry, settings: FakeSettings
+    ) -> None:
+        manager.remember_browser_session(
+            "browser_navigate", {"url": "https://linkedin.com/"}
+        )
+        manager2 = PermissionManager(settings=settings)  # type: ignore[arg-type]
+        decision = manager2.check(
+            registry.get("browser_navigate"), {"url": "https://linkedin.com/feed"}
+        )
+        assert decision == PermissionDecision.NEEDS_APPROVAL
+
+    def test_browser_screenshot_path_outside_whitelist_needs_approval(
+        self, manager: PermissionManager, registry, tmp_path: Path
+    ) -> None:
+        # READ category, pero el path se valida como escritura → fuera de
+        # whitelist pide aprobación.
+        decision = manager.check(
+            registry.get("browser_screenshot"),
+            {"output_path": str(tmp_path / "out" / "shot.png")},
+        )
+        assert decision == PermissionDecision.NEEDS_APPROVAL

@@ -435,11 +435,25 @@ class AgentLoop:
             )
             return False
 
-        # Aprobaciones que persisten
+        # Aprobaciones que persisten.
+        # Las tools BROWSER nunca persisten entre sesiones (decisión A.5):
+        # tanto 's' como 'a' se recuerdan solo por sesión, con sticky por
+        # dominio cuando la tool navega a una URL.
+        is_browser = tool_def.category == PermissionCategory.BROWSER
         if response.choice == ApprovalChoice.APPROVE_SESSION:
-            self.permissions.remember_session(tool_def.name, args)
+            if is_browser:
+                self.permissions.remember_browser_session(tool_def.name, args)
+            else:
+                self.permissions.remember_session(tool_def.name, args)
         elif response.choice == ApprovalChoice.APPROVE_ALWAYS:
-            self.permissions.remember_always(tool_def.name, args)
+            if is_browser:
+                self.renderer.render_info(
+                    "Las acciones de browser solo se recuerdan por sesión "
+                    "(no se persisten). Aplicando para esta sesión."
+                )
+                self.permissions.remember_browser_session(tool_def.name, args)
+            else:
+                self.permissions.remember_always(tool_def.name, args)
         # APPROVE_ONCE: simplemente seguimos
 
         return True

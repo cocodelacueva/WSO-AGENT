@@ -170,6 +170,50 @@ los modelos chicos: `layout` opcional (default `content`), `content`/
 de `slides_json`. Esto reduce los errores de validación en vueltas con
 modelos locales.
 
+### Browser bridge (v0.3, en progreso)
+
+WSO puede manejar tu **Chrome real** para operar apps web sin API
+(LinkedIn, Sales Navigator, dashboards internos). No arranca un Chrome
+propio: se attachea por CDP a uno que vos iniciás, reutilizando tus
+cookies y sesiones logueadas. LinkedIn ve tu navegador, no un bot.
+
+Instalá la extra y el binario de Playwright:
+
+```bash
+pip install -e ".[browser]"
+# (para attach puro por CDP no hace falta `playwright install`)
+```
+
+Arrancá Chrome con remote debugging (perfil aislado, recomendado):
+
+```bash
+./scripts/launch-chrome-cdp.sh            # Mac/Linux
+# Windows: .\scripts\launch-chrome-cdp.ps1
+```
+
+La primera vez logueate en los sitios que vayas a usar dentro de esa
+ventana aislada (`~/.wso-chrome`); la sesión queda persistida. Con
+`--default` usás tu perfil real (más cómodo, menos seguro; cerrá las
+otras ventanas de Chrome antes).
+
+Configurá el endpoint (default ya alineado con el script):
+
+```env
+WSO_BROWSER_CDP_URL=http://localhost:9222
+```
+
+Tools disponibles: `browser_open_tab`, `browser_navigate`,
+`browser_close_tab`, `browser_read_page`, `browser_screenshot`,
+`browser_click`, `browser_type`, `browser_wait_for`.
+
+Permisos: las acciones de browser (navegar, click, type) son categoría
+`BROWSER` y **nunca se auto-aprueban por default**. Aprobar una
+navegación "por sesión" (`s`) habilita futuras navegaciones al mismo
+dominio. Nada de browser se persiste entre sesiones.
+
+Antes de codear esto validamos el attach con `scripts/spike_cdp_attach.py`
+(lee tus tabs y el texto de Sales Navigator sin tocar nada).
+
 ### Logging estructurado de sesiones
 
 Para activar logging de cada sesión, configurá en `.env`:
@@ -262,13 +306,20 @@ logs/                  # audit trail de sesiones
       `content`→`bullets`, alias `slides`), guardrails de rutas/archivos en
       el system prompt, `num_ctx` default 16384 y `max_chars` en lecturas
 
-**v3 (futuro):**
-- [ ] **Browser bridge mínimo** — el agente maneja tu Chrome real
+**v3 (en progreso):**
+- [x] **Spike de validación CDP** — confirmado que Playwright + CDP attach
+      lee Sales Navigator real con la sesión logueada y sin detección de
+      automation (`navigator.webdriver=false`). Ver `scripts/`.
+- [x] **Browser bridge mínimo** — el agente maneja tu Chrome real
       (vía Playwright + CDP attach), reutilizando tus sesiones logueadas.
-      Tools: `browser_open_tab`, `browser_navigate`, `browser_read_page`,
-      `browser_click`, `browser_type`, `browser_screenshot`, `browser_wait_for`.
-      Reemplaza el approach LinkedIn-RSS (no viable: LinkedIn bloquea y
-      Sales Navigator no expone RSS). Ver DESIGN.md, apéndice "Browser bridge".
+      8 tools (`browser_open_tab`, `browser_navigate`, `browser_close_tab`,
+      `browser_read_page`, `browser_screenshot`, `browser_click`,
+      `browser_type`, `browser_wait_for`), categoría de permiso `BROWSER`
+      con sticky por dominio. Reemplaza el approach LinkedIn-RSS (no viable:
+      LinkedIn bloquea y Sales Navigator no expone RSS). Ver DESIGN.md,
+      apéndice "Browser bridge".
+- [ ] E2E manual contra LinkedIn/Sales Navigator y endurecimiento
+      (stealth, delays, detección de session expiry).
 - [ ] `run_python` con sandbox (subprocess aislado + cwd limitado + timeout)
 - [ ] Persistencia de historial entre sesiones
 - [ ] Memoria de largo plazo (RAG sobre `/context`)

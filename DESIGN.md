@@ -777,18 +777,21 @@ del estudio) no expone feed. La alternativa correcta es el browser bridge
 (v0.3) — usar el Chrome real del usuario, ya logueado, sin pasar
 credenciales.
 
-### v0.3 (futuro)
+### v0.3 (en progreso)
 
-- [ ] **Browser bridge mínimo** — el agente maneja el Chrome real del
+- [x] **Browser bridge mínimo** — el agente maneja el Chrome real del
       usuario (vía Playwright + CDP attach) reutilizando sus sesiones
       logueadas. Reemplaza el approach LinkedIn-RSS (no viable). Sirve
       como puente general para cualquier app web sin API: LinkedIn,
       Sales Navigator, Notion, Airtable, dashboards internos, etc.
-      Tools mínimas: `browser_open_tab`, `browser_navigate`,
+      8 tools implementadas: `browser_open_tab`, `browser_navigate`,
       `browser_read_page`, `browser_click`, `browser_type`,
-      `browser_screenshot`, `browser_wait_for`, `browser_close_tab`.
-      Categoría de permiso nueva: `BROWSER`. Ver Apéndice A más abajo
-      para el plan técnico completo.
+      `browser_screenshot`, `browser_wait_for`, `browser_close_tab`
+      (`wso/tools/browser.py`). Categoría de permiso `BROWSER` con sticky
+      por dominio a nivel de sesión (`permissions/manager.py`). Las
+      operaciones corren en un worker thread dedicado para no chocar con
+      el event loop (ver A.6). Spike previo validó el attach contra Sales
+      Navigator real. Falta: E2E manual y endurecimiento. Ver Apéndice A.
 - [ ] `run_python` con sandbox real (subprocess aislado + cwd limitado a
       `workspace/` + timeout + EXECUTE permission gateado). Es el escape
       hatch del patrón híbrido (decisión 3.1) para tareas raras que no
@@ -983,3 +986,37 @@ de codear:
    Chrome real con tu Sales Navigator logueado. Si LinkedIn detecta el
    automation y te limita, el plan completo cambia.
 3. Recién entonces, abrir el iter de browser bridge.
+
+### A.10 Resultado del spike y decisiones tomadas (2026-06)
+
+El spike (`scripts/spike_cdp_attach.py` + `scripts/launch-chrome-cdp.sh`)
+se corrió contra Chrome real y **validó la base**:
+
+- `connect_over_cdp` se attachea al Chrome del usuario y ve sus tabs
+  reales (no un navegador limpio).
+- Tras loguearse, `browser_read_page` (vía `innerText`) devuelve el
+  contenido real de Sales Navigator (`Home / Accounts / Leads / ...`),
+  no una pantalla de login.
+- `navigator.webdriver` da **`false`**: LinkedIn no detectó automation
+  con el flag `--disable-blink-features=AutomationControlled`.
+
+Decisiones cerradas a partir del spike:
+
+- **Perfil**: aislado (`~/.wso-chrome`) como default; el usuario se
+  loguea una vez y persiste. `--default` queda como opt-in documentado.
+- **Sync vs async (A.6)**: resuelto con **worker thread dedicado**. El
+  loop ejecuta las tools síncronamente dentro del thread del event loop,
+  donde Playwright `sync_api` se niega a operar. Un thread propio que es
+  dueño de la conexión y los objetos (page/context, no thread-safe)
+  resuelve ambos problemas sin volver async el contrato de tools.
+- **Espera de SPA**: las lecturas/acciones esperan render real; existe
+  `browser_wait_for` para el modelo y `browser_read_page` avisa cuando el
+  body está vacío (probable login wall / SPA sin renderizar).
+- **Permisos**: `BROWSER` nunca auto-aprueba por default. Sticky de
+  sesión **por dominio** para navegación (open_tab/navigate comparten
+  grupo); las acciones sin URL (click/type) caen al sticky por args
+  exactos. Nada persiste entre sesiones.
+
+Pendiente para el siguiente iter: E2E manual leyendo posts reales,
+endurecimiento (stealth/delays, detección de session expiry y pantallas
+de login a nivel del loop).

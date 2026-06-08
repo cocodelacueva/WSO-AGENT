@@ -134,6 +134,15 @@ class TestLoadBuiltinTools:
             # pdf / docx (v0.2)
             "read_pdf",
             "read_docx",
+            # browser (v0.3)
+            "browser_open_tab",
+            "browser_navigate",
+            "browser_close_tab",
+            "browser_read_page",
+            "browser_screenshot",
+            "browser_click",
+            "browser_type",
+            "browser_wait_for",
         }
         actual = {t.name for t in registry.all()}
         assert actual == expected
@@ -160,10 +169,19 @@ class TestLoadBuiltinTools:
         # pdf / docx tools
         assert registry.get("read_pdf").category == PermissionCategory.READ
         assert registry.get("read_docx").category == PermissionCategory.READ
+        # browser tools (v0.3)
+        assert registry.get("browser_open_tab").category == PermissionCategory.BROWSER
+        assert registry.get("browser_navigate").category == PermissionCategory.BROWSER
+        assert registry.get("browser_close_tab").category == PermissionCategory.BROWSER
+        assert registry.get("browser_click").category == PermissionCategory.BROWSER
+        assert registry.get("browser_type").category == PermissionCategory.BROWSER
+        assert registry.get("browser_read_page").category == PermissionCategory.READ
+        assert registry.get("browser_screenshot").category == PermissionCategory.READ
+        assert registry.get("browser_wait_for").category == PermissionCategory.READ
 
     def test_idempotent_creates_independent_registries(self) -> None:
         # Cada llamada devuelve un registry nuevo (no comparten estado)
         r1 = load_builtin_tools()
         r2 = load_builtin_tools()
         assert r1 is not r2
-        assert len(r1) == len(r2) == 16
+        assert len(r1) == len(r2) == 24

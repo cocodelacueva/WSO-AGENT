@@ -56,6 +56,13 @@ class Settings(BaseSettings):
     # cloud_provider="openai". Si es None usa la API default de OpenAI.
     openai_base_url: str | None = None
 
+    # --- Browser bridge (v0.3) ---
+    browser_cdp_url: str = "http://localhost:9222"
+    """Endpoint CDP del Chrome real al que se attachea el browser bridge.
+    El usuario arranca Chrome con remote debugging vía
+    scripts/launch-chrome-cdp.sh (default port 9222). El agente NO arranca
+    un Chrome propio: se conecta a este, reutilizando sesiones/cookies."""
+
     # --- API Keys (sin prefijo WSO_, son convenciones globales) ---
     anthropic_api_key: SecretStr | None = Field(default=None, alias="ANTHROPIC_API_KEY")
     openai_api_key: SecretStr | None = Field(default=None, alias="OPENAI_API_KEY")
