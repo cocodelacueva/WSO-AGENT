@@ -9,6 +9,7 @@ from wso.tools.base import (
     ToolValidationError,
     get_tool_definition,
     tool,
+    truncate_with_notice,
 )
 
 
@@ -182,3 +183,86 @@ class TestPromptSection:
         section = defn.to_prompt_section()
         assert "(ninguno)" in section
         assert '<tool name="ping" />' in section
+
+
+class TestArgAliases:
+    """Aliases de args: tolerar que el modelo use otro nombre de arg."""
+
+    def _make(self):
+        @tool(
+            name="gen",
+            category=PermissionCategory.WRITE,
+            description="x",
+            args_schema={"path": "ruta", "data_json": "json"},
+            aliases={"data": "data_json", "payload": "data_json"},
+        )
+        def gen(path: str, data_json: str) -> str:
+            return f"{path}|{data_json}"
+
+        return gen
+
+    def test_alias_is_remapped_on_call(self) -> None:
+        gen = self._make()
+        defn = get_tool_definition(gen)
+        assert defn is not None
+        # El modelo emite `data` en vez de `data_json`.
+        out = defn.validate_and_call({"path": "/x", "data": "[]"})
+        assert out == "/x|[]"
+
+    def test_canonical_wins_over_alias(self) -> None:
+        gen = self._make()
+        defn = get_tool_definition(gen)
+        assert defn is not None
+        # Si vienen ambos, gana el canónico; el alias se ignora.
+        out = defn.validate_and_call(
+            {"path": "/x", "data_json": "CANON", "data": "ALIAS"}
+        )
+        assert out == "/x|CANON"
+
+    def test_alias_to_nonexistent_arg_raises(self) -> None:
+        with pytest.raises(ValueError, match="inexistentes"):
+
+            @tool(
+                name="bad",
+                category=PermissionCategory.READ,
+                description="x",
+                args_schema={"path": "ruta"},
+                aliases={"foo": "no_existe"},
+            )
+            def bad(path: str) -> str:
+                return path
+
+    def test_alias_clashing_with_real_arg_raises(self) -> None:
+        with pytest.raises(ValueError, match="colisionan"):
+
+            @tool(
+                name="bad2",
+                category=PermissionCategory.READ,
+                description="x",
+                args_schema={"path": "ruta", "other": "o"},
+                aliases={"path": "other"},
+            )
+            def bad2(path: str, other: str) -> str:
+                return path
+
+
+class TestTruncateWithNotice:
+    def test_short_text_unchanged(self) -> None:
+        assert truncate_with_notice("hola", 100) == "hola"
+
+    def test_none_or_zero_cap_disables(self) -> None:
+        text = "x" * 500
+        assert truncate_with_notice(text, None) == text
+        assert truncate_with_notice(text, 0) == text
+
+    def test_long_text_truncated_with_notice(self) -> None:
+        text = "A" * 1000
+        out = truncate_with_notice(text, 100, what="el doc")
+        assert out.startswith("A" * 100)
+        assert "TRUNCADO" in out
+        assert "el doc" in out
+        assert len(out) < len(text) + 300  # head + aviso, no el cuerpo entero
+
+    def test_more_hint_is_included(self) -> None:
+        out = truncate_with_notice("Z" * 200, 50, more_hint="Subí max_chars.")
+        assert "Subí max_chars." in out

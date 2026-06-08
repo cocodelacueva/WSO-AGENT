@@ -26,11 +26,36 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.5",
     "mypy>=1.10",
+    # reportlab: genera PDFs con texto extraíble para los tests de read_pdf.
+    "reportlab>=4.0",
 ]
 # Cloud providers (instalá solo el que vayas a usar)
 google = ["google-generativeai>=0.8"]
 anthropic = ["anthropic>=0.40"]
 openai = ["openai>=1.50"]
+# Tools de Office (instalá si vas a generar/leer .pptx, .xlsx, .pdf, .docx)
+office = [
+    "python-pptx>=1.0",
+    "openpyxl>=3.1",
+    "pypdf>=4.0",
+    "python-docx>=1.1",
+]
+# Meta-extra: todo lo opcional de una. Útil para desarrollo activo.
+# Equivalente a [dev,office,google,anthropic,openai].
+all = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "reportlab>=4.0",
+    "python-pptx>=1.0",
+    "openpyxl>=3.1",
+    "pypdf>=4.0",
+    "python-docx>=1.1",
+    "google-generativeai>=0.8",
+    "anthropic>=0.40",
+    "openai>=1.50",
+]
 
 [project.scripts]
 wso = "wso.main:main"

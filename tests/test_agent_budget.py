@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
 from io import StringIO
 
 import pytest
@@ -228,5 +229,5 @@ class TestAskContinuation:
 class TestContinuationResponse:
     def test_is_frozen(self) -> None:
         response = ContinuationResponse(decision="continue")
-        with pytest.raises(Exception):
+        with pytest.raises(FrozenInstanceError):
             response.decision = "abort"  # type: ignore[misc]

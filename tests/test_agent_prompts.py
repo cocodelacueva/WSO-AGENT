@@ -35,6 +35,16 @@ class TestBuildSystemPrompt:
         assert "preguntar_al_usuario" in prompt
         assert "UNA sola acción por respuesta" in prompt
 
+    def test_includes_file_discipline_guardrails(self) -> None:
+        registry = load_builtin_tools()
+        prompt = build_system_prompt(registry)
+
+        # Guardrails añadidos tras la prueba 2 (errores del modelo local).
+        assert "Disciplina de archivos y rutas" in prompt
+        assert "RESPETÁ LA CARPETA DEL USUARIO" in prompt
+        assert "NO ALUCINES NOMBRES DE ARCHIVO" in prompt
+        assert "LISTÁ EL DIRECTORIO" in prompt
+
     def test_includes_few_shot_example(self) -> None:
         registry = load_builtin_tools()
         prompt = build_system_prompt(registry)

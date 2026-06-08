@@ -21,6 +21,7 @@ from wso.agent.model.factory import build_model_client
 from wso.agent.prompts import build_system_prompt, load_context_files
 from wso.config import settings
 from wso.permissions.manager import PermissionManager
+from wso.session_log import SessionLogger
 from wso.tools.registry import load_builtin_tools
 from wso.ui.console import ConsoleRenderer
 
@@ -77,6 +78,14 @@ async def _run(console: Console) -> int:
             f"({len(context)} caracteres)."
         )
 
+    # Logger estructurado (opt-in via WSO_LOG_ENABLED). Si está deshabilitado,
+    # el logger es no-op y no toca el disco.
+    session_log = SessionLogger(
+        log_dir=settings.logs_dir if settings.log_enabled else None
+    )
+    if session_log.enabled:
+        renderer.render_info(f"Logging habilitado: {session_log.path}")
+
     # Construir y arrancar el loop
     loop = AgentLoop(
         model=model,
@@ -84,6 +93,7 @@ async def _run(console: Console) -> int:
         permissions=permissions,
         renderer=renderer,
         system_prompt=system_prompt,
+        session_log=session_log,
     )
 
     await loop.run_repl()

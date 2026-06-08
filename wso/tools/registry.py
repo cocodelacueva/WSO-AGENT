@@ -98,19 +98,35 @@ class ToolRegistry:
 
 
 def load_builtin_tools() -> ToolRegistry:
-    """Cargar el set built-in de tools de v1.
+    """Cargar el set built-in de tools.
 
-    Importa los módulos `filesystem` y `flow` y registra todas sus
-    tools decoradas con `@tool`. Devuelve un registry listo para usar.
+    Importa los módulos de tools y registra todas sus funciones decoradas
+    con `@tool`. Devuelve un registry listo para usar.
+
+    Las tools de `pptx`, `xlsx`, `pdf` y `docx` quedan registradas sin
+    importar si las deps respectivas están instaladas. Cada paquete se
+    importa lazy: solo falla si el modelo realmente invoca la tool sin
+    tener la extra instalada (con un mensaje guía pidiendo
+    `pip install -e ".[office]"`).
 
     Returns:
-        Registry poblado con las 6 tools de v1:
-            read_file, write_file, delete_file, list_directory,
-            responder_al_usuario, preguntar_al_usuario.
+        Registry poblado con las 16 tools built-in:
+            - filesystem (4): read_file, write_file, delete_file, list_directory
+            - flow (2):       responder_al_usuario, preguntar_al_usuario
+            - pptx (4):       generate_pptx, read_pptx, edit_pptx_slide,
+                              generate_pptx_from_template
+            - xlsx (4):       generate_xlsx, read_xlsx, edit_xlsx_cell,
+                              append_xlsx_rows
+            - pdf (1):        read_pdf
+            - docx (1):       read_docx
     """
-    from wso.tools import filesystem, flow
+    from wso.tools import docx, filesystem, flow, pdf, pptx, xlsx
 
     registry = ToolRegistry()
     registry.register_module(filesystem)
     registry.register_module(flow)
+    registry.register_module(pptx)
+    registry.register_module(xlsx)
+    registry.register_module(pdf)
+    registry.register_module(docx)
     return registry

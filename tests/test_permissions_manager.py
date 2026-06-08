@@ -11,9 +11,7 @@ from wso.permissions.manager import (
     PermissionDecision,
     PermissionManager,
 )
-from wso.tools.base import PermissionCategory
 from wso.tools.registry import load_builtin_tools
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
