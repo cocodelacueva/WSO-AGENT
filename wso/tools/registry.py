@@ -110,7 +110,7 @@ def load_builtin_tools() -> ToolRegistry:
     `pip install -e ".[office]"`).
 
     Returns:
-        Registry poblado con las 25 tools built-in:
+        Registry poblado con las 26 tools built-in:
             - filesystem (4): read_file, write_file, delete_file, list_directory
             - flow (2):       responder_al_usuario, preguntar_al_usuario
             - code (1):       run_python
@@ -120,10 +120,10 @@ def load_builtin_tools() -> ToolRegistry:
                               append_xlsx_rows
             - pdf (1):        read_pdf
             - docx (1):       read_docx
-            - browser (8):    browser_open_tab, browser_navigate,
+            - browser (9):    browser_open_tab, browser_navigate,
                               browser_close_tab, browser_read_page,
                               browser_screenshot, browser_click,
-                              browser_type, browser_wait_for
+                              browser_type, browser_wait_for, browser_scroll
 
     Las tools de `browser` se registran igual que las de Office: sin importar
     Playwright. Solo fallan al invocarse si falta la extra `[browser]` o si

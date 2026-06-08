@@ -145,6 +145,7 @@ class TestLoadBuiltinTools:
             "browser_click",
             "browser_type",
             "browser_wait_for",
+            "browser_scroll",
         }
         actual = {t.name for t in registry.all()}
         assert actual == expected
@@ -180,6 +181,7 @@ class TestLoadBuiltinTools:
         assert registry.get("browser_read_page").category == PermissionCategory.READ
         assert registry.get("browser_screenshot").category == PermissionCategory.READ
         assert registry.get("browser_wait_for").category == PermissionCategory.READ
+        assert registry.get("browser_scroll").category == PermissionCategory.READ
         # code (v0.3)
         assert registry.get("run_python").category == PermissionCategory.EXECUTE
 
@@ -188,4 +190,4 @@ class TestLoadBuiltinTools:
         r1 = load_builtin_tools()
         r2 = load_builtin_tools()
         assert r1 is not r2
-        assert len(r1) == len(r2) == 25
+        assert len(r1) == len(r2) == 26

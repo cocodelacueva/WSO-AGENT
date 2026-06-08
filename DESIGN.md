@@ -785,10 +785,10 @@ credenciales.
       logueadas. Reemplaza el approach LinkedIn-RSS (no viable). Sirve
       como puente general para cualquier app web sin API: LinkedIn,
       Sales Navigator, Notion, Airtable, dashboards internos, etc.
-      8 tools implementadas: `browser_open_tab`, `browser_navigate`,
+      9 tools implementadas: `browser_open_tab`, `browser_navigate`,
       `browser_read_page`, `browser_click`, `browser_type`,
-      `browser_screenshot`, `browser_wait_for`, `browser_close_tab`
-      (`wso/tools/browser.py`). Categoría de permiso `BROWSER` con sticky
+      `browser_screenshot`, `browser_wait_for`, `browser_close_tab`,
+      `browser_scroll` (`wso/tools/browser.py`). Categoría de permiso `BROWSER` con sticky
       por dominio a nivel de sesión (`permissions/manager.py`). Las
       operaciones corren en un worker thread dedicado para no chocar con
       el event loop (ver A.6). Spike previo validó el attach contra Sales
@@ -918,6 +918,7 @@ default con flag.
 | `browser_click`        | BROWSER   | selector (CSS o texto)        | Click humano (con scroll-into-view).    |
 | `browser_type`         | BROWSER   | selector, text                | Type human-like en input.               |
 | `browser_wait_for`     | READ      | selector, timeout_ms          | Espera elemento (SPA-friendly).         |
+| `browser_scroll`       | READ      | direction, amount             | Scroll para revelar contenido lazy.     |
 
 Notas:
 

@@ -448,6 +448,51 @@ def browser_type(selector: str, text: str) -> str:
 
 
 @tool(
+    name="browser_scroll",
+    category=PermissionCategory.READ,
+    description=(
+        "Hace scroll en la tab activa para revelar más contenido (útil en "
+        "feeds/listados con carga perezosa o scroll infinito, como resultados "
+        "de búsqueda de LinkedIn). direction: 'down' | 'up' | 'top' | 'bottom'. "
+        "amount = cantidad de pantallas a desplazar (solo para up/down). Tras "
+        "scrollear, usá browser_read_page para leer lo nuevo."
+    ),
+    args_schema={
+        "direction": "dirección: down | up | top | bottom (default down)",
+        "amount": "cuántas pantallas desplazar en up/down (default 1)",
+    },
+)
+def browser_scroll(direction: str = "down", amount: int = 1) -> str:
+    """Hacer scroll en la tab activa."""
+    d = direction.strip().lower()
+    if d not in ("down", "up", "top", "bottom"):
+        raise ValueError(
+            f"direction inválida: {direction!r}. Usá down | up | top | bottom."
+        )
+    steps = max(1, amount)
+
+    def _op(w: _BrowserWorker) -> str:
+        page = _live_page(w)
+        if d == "top":
+            page.evaluate("() => window.scrollTo(0, 0)")
+        elif d == "bottom":
+            page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+        else:
+            sign = 1 if d == "down" else -1
+            page.evaluate(
+                f"() => window.scrollBy(0, {sign} * window.innerHeight * 0.9 * {steps})"
+            )
+        # Darle tiempo al contenido lazy a cargar antes de seguir.
+        page.wait_for_timeout(600)
+        return (
+            f"Scroll '{d}' ejecutado (amount={steps}). "
+            f"Usá browser_read_page para leer el contenido nuevo."
+        )
+
+    return _run(_op)
+
+
+@tool(
     name="browser_wait_for",
     category=PermissionCategory.READ,
     description=(

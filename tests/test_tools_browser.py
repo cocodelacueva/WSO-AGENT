@@ -48,7 +48,11 @@ class FakePage:
         self.calls.append(("goto", url))
 
     def evaluate(self, script: str) -> str:
+        self.calls.append(("evaluate", script))
         return self._text
+
+    def wait_for_timeout(self, ms: int) -> None:
+        self.calls.append(("wait_for_timeout", ms))
 
     def click(self, selector: str, **kw) -> None:
         if self.raise_on_click:
@@ -150,12 +154,14 @@ class TestToolMetadata:
                 "browser_read_page",
                 "browser_screenshot",
                 "browser_wait_for",
+                "browser_scroll",
             ]
         }
         for name in ["browser_open_tab", "browser_navigate", "browser_close_tab",
                      "browser_click", "browser_type"]:
             assert defs[name].category == PermissionCategory.BROWSER
-        for name in ["browser_read_page", "browser_screenshot", "browser_wait_for"]:
+        for name in ["browser_read_page", "browser_screenshot", "browser_wait_for",
+                     "browser_scroll"]:
             assert defs[name].category == PermissionCategory.READ
 
 
@@ -223,6 +229,39 @@ class TestReading:
         fake.active_page.raise_on_wait = True
         with pytest.raises(TimeoutError):
             browser.browser_wait_for("div.never")
+
+
+# ---------------------------------------------------------------------------
+# Scroll
+# ---------------------------------------------------------------------------
+
+
+class TestScroll:
+    def test_scroll_down_default(self, fake: FakeWorker) -> None:
+        result = browser.browser_scroll()
+        scripts = [c for c in fake.active_page.calls if c[0] == "evaluate"]
+        assert any("scrollBy" in c[1] for c in scripts)
+        assert ("wait_for_timeout", 600) in fake.active_page.calls
+        assert "down" in result
+
+    def test_scroll_bottom_uses_scroll_height(self, fake: FakeWorker) -> None:
+        browser.browser_scroll(direction="bottom")
+        scripts = [c[1] for c in fake.active_page.calls if c[0] == "evaluate"]
+        assert any("scrollHeight" in s for s in scripts)
+
+    def test_scroll_top_goes_to_zero(self, fake: FakeWorker) -> None:
+        browser.browser_scroll(direction="top")
+        scripts = [c[1] for c in fake.active_page.calls if c[0] == "evaluate"]
+        assert any("scrollTo(0, 0)" in s for s in scripts)
+
+    def test_scroll_up_negative_sign(self, fake: FakeWorker) -> None:
+        browser.browser_scroll(direction="up", amount=3)
+        scripts = [c[1] for c in fake.active_page.calls if c[0] == "evaluate"]
+        assert any("scrollBy" in s and "-1" in s and "3" in s for s in scripts)
+
+    def test_scroll_invalid_direction_raises(self, fake: FakeWorker) -> None:
+        with pytest.raises(ValueError, match="direction"):
+            browser.browser_scroll(direction="sideways")
 
 
 # ---------------------------------------------------------------------------

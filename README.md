@@ -204,7 +204,7 @@ WSO_BROWSER_CDP_URL=http://localhost:9222
 
 Tools disponibles: `browser_open_tab`, `browser_navigate`,
 `browser_close_tab`, `browser_read_page`, `browser_screenshot`,
-`browser_click`, `browser_type`, `browser_wait_for`.
+`browser_click`, `browser_type`, `browser_wait_for`, `browser_scroll`.
 
 Permisos: las acciones de browser (navegar, click, type) son categoría
 `BROWSER` y **nunca se auto-aprueban por default**. Aprobar una
@@ -346,10 +346,10 @@ logs/                  # audit trail de sesiones
       automation (`navigator.webdriver=false`). Ver `scripts/`.
 - [x] **Browser bridge mínimo** — el agente maneja tu Chrome real
       (vía Playwright + CDP attach), reutilizando tus sesiones logueadas.
-      8 tools (`browser_open_tab`, `browser_navigate`, `browser_close_tab`,
+      9 tools (`browser_open_tab`, `browser_navigate`, `browser_close_tab`,
       `browser_read_page`, `browser_screenshot`, `browser_click`,
-      `browser_type`, `browser_wait_for`), categoría de permiso `BROWSER`
-      con sticky por dominio. Reemplaza el approach LinkedIn-RSS (no viable:
+      `browser_type`, `browser_wait_for`, `browser_scroll`), categoría de
+      permiso `BROWSER` con sticky por dominio. Reemplaza el approach LinkedIn-RSS (no viable:
       LinkedIn bloquea y Sales Navigator no expone RSS). Ver DESIGN.md,
       apéndice "Browser bridge".
 - [ ] E2E manual contra LinkedIn/Sales Navigator y endurecimiento
