@@ -341,7 +341,8 @@ wso/
 │   ├── xlsx_schemas.py           # Pydantic models de sheets/workbook
 │   ├── pdf.py                    # read_pdf (texto por página, start_page/max_chars)
 │   ├── docx.py                   # read_docx (párrafos, headings, tablas, max_chars)
-│   └── code.py                   # run_python (stub — implementación en v0.3)
+│   ├── browser.py                # browser_* (CDP attach a Chrome real, v0.3)
+│   └── code.py                   # run_python (sandbox subprocess, v0.3)
 ├── permissions/
 │   ├── manager.py                # PermissionManager + AlwaysAllowRule
 │   └── prompts.py                # ask_approval, parse_approval_input
@@ -792,12 +793,16 @@ credenciales.
       operaciones corren en un worker thread dedicado para no chocar con
       el event loop (ver A.6). Spike previo validó el attach contra Sales
       Navigator real. Falta: E2E manual y endurecimiento. Ver Apéndice A.
-- [ ] `run_python` con sandbox real (subprocess aislado + cwd limitado a
-      `workspace/` + timeout + EXECUTE permission gateado). Es el escape
-      hatch del patrón híbrido (decisión 3.1) para tareas raras que no
-      merecen una tool tipada propia. Diferido a v0.3 porque hacerlo bien
-      requiere decisiones de diseño propias del sandbox (subprocess vs
-      RestrictedPython vs WASM) que no queremos rushear.
+- [x] `run_python` con sandbox real (`wso/tools/code.py`). Escape hatch del
+      patrón híbrido (decisión 3.1) para tareas raras que no merecen una tool
+      tipada propia. Decisiones cerradas: **subprocess aislado**
+      (`sys.executable -I`) con cwd en `workspace/run`, timeout de pared,
+      resource limits (RLIMIT_CPU/FSIZE en Unix, RLIMIT_AS solo Linux), red
+      deshabilitada best-effort (subclase de socket que bloquea en `connect`,
+      sin romper imports de `ssl`/`http`/`urllib`), y gate de permiso EXECUTE
+      (sin auto-aprobación) como control real. Se descartaron RestrictedPython
+      (frágil) y WASM (sobredimensionado, sin acceso al FS del usuario).
+      Política de imports: stdlib completa, sin red.
 - [ ] Persistencia de historial entre sesiones
 - [ ] Memoria de largo plazo (RAG sobre `/context`)
 - [ ] Modo no-conversacional para batch jobs

@@ -86,6 +86,11 @@ class Settings(BaseSettings):
         return self.workspace_dir / "output"
 
     @property
+    def run_dir(self) -> Path:
+        """cwd del sandbox de run_python. Los scripts se ejecutan acá."""
+        return self.workspace_dir / "run"
+
+    @property
     def config_dir(self) -> Path:
         return PROJECT_ROOT / "config"
 
@@ -100,6 +105,18 @@ class Settings(BaseSettings):
     # --- Constantes del loop ---
     step_budget: int = 10
     """Cantidad máxima de tool calls antes de pedir continuación."""
+
+    # --- run_python (sandbox) ---
+    run_python_timeout: int = 30
+    """Timeout default (segundos) para run_python. También actúa como tope:
+    el modelo no puede pedir más que esto."""
+
+    run_python_max_memory_mb: int = 512
+    """Límite de memoria (RLIMIT_AS) del subprocess en Linux. En macOS no se
+    aplica (RLIMIT_AS es poco confiable ahí); se confía en el timeout."""
+
+    run_python_max_output_chars: int = 16000
+    """Tope de caracteres de stdout/stderr devueltos (trunca con aviso)."""
 
     # --- Logging estructurado ---
     log_enabled: bool = False

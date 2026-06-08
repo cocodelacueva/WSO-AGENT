@@ -214,6 +214,24 @@ dominio. Nada de browser se persiste entre sesiones.
 Antes de codear esto validamos el attach con `scripts/spike_cdp_attach.py`
 (lee tus tabs y el texto de Sales Navigator sin tocar nada).
 
+### run_python (escape hatch)
+
+Para tareas que no tienen una tool dedicada, el modelo puede escribir
+Python y ejecutarlo con `run_python`. Corre en un **subprocess
+contenido**: aislado (`python -I`), cwd en `workspace/run`, con timeout,
+resource limits (Unix) y **sin acceso a red**. Cada corrida pide
+aprobación (categoría `EXECUTE`, sin auto-aprobación).
+
+Puede importar toda la stdlib y leer/escribir archivos como cualquier
+proceso tuyo; la contención apunta a frenar accidentes y corridas
+colgadas, con tu aprobación como gate real. Ajustable en `.env`:
+
+```env
+WSO_RUN_PYTHON_TIMEOUT=30           # segundos (default y tope)
+WSO_RUN_PYTHON_MAX_MEMORY_MB=512    # RLIMIT_AS en Linux
+WSO_RUN_PYTHON_MAX_OUTPUT_CHARS=16000
+```
+
 ### Logging estructurado de sesiones
 
 Para activar logging de cada sesión, configurá en `.env`:
@@ -320,6 +338,9 @@ logs/                  # audit trail de sesiones
       apéndice "Browser bridge".
 - [ ] E2E manual contra LinkedIn/Sales Navigator y endurecimiento
       (stealth, delays, detección de session expiry).
+- [x] **`run_python`** — escape hatch del patrón híbrido: el modelo escribe
+      Python y se ejecuta en un subprocess contenido (aislado, cwd
+      `workspace/run`, timeout, sin red, gateado por permiso EXECUTE).
 - [ ] `run_python` con sandbox (subprocess aislado + cwd limitado + timeout)
 - [ ] Persistencia de historial entre sesiones
 - [ ] Memoria de largo plazo (RAG sobre `/context`)

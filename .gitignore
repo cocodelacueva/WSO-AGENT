@@ -31,6 +31,9 @@ logs/*
 workspace/output/*
 !workspace/output/.gitkeep
 
+# Sandbox de run_python (scripts temporales y archivos que cree el código)
+workspace/run/
+
 # Sistema
 .DS_Store
 Thumbs.db

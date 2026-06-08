@@ -121,6 +121,8 @@ class TestLoadBuiltinTools:
             # flow
             "responder_al_usuario",
             "preguntar_al_usuario",
+            # code (v0.3)
+            "run_python",
             # pptx (v0.2)
             "generate_pptx",
             "read_pptx",
@@ -178,10 +180,12 @@ class TestLoadBuiltinTools:
         assert registry.get("browser_read_page").category == PermissionCategory.READ
         assert registry.get("browser_screenshot").category == PermissionCategory.READ
         assert registry.get("browser_wait_for").category == PermissionCategory.READ
+        # code (v0.3)
+        assert registry.get("run_python").category == PermissionCategory.EXECUTE
 
     def test_idempotent_creates_independent_registries(self) -> None:
         # Cada llamada devuelve un registry nuevo (no comparten estado)
         r1 = load_builtin_tools()
         r2 = load_builtin_tools()
         assert r1 is not r2
-        assert len(r1) == len(r2) == 24
+        assert len(r1) == len(r2) == 25
