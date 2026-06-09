@@ -25,7 +25,6 @@ Flujo conceptual de una sesión:
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import json
 import time
 from dataclasses import dataclass, field
@@ -47,8 +46,6 @@ from wso.session_log import SessionLogger
 from wso.tools.base import PermissionCategory, ToolDefinition
 from wso.tools.registry import ToolRegistry
 from wso.ui.console import ConsoleRenderer
-
-_USER_PROMPT_MARKUP = "[bold cyan]›[/] "
 
 # Tras esta cantidad de errores de modelo consecutivos (API caída, sin crédito,
 # modelo inexistente, auth), abortamos el turno en vez de reintentar en vano y
@@ -86,6 +83,7 @@ class AgentLoop:
     _session_started_monotonic: float = field(default=0.0, init=False, repr=False)
     _consecutive_model_errors: int = field(default=0, init=False, repr=False)
     _last_model_error: str = field(default="", init=False, repr=False)
+    _prompt_session: object | None = field(default=None, init=False, repr=False)
 
     # ---- API pública ----
 
@@ -558,72 +556,33 @@ class AgentLoop:
     # ---- I/O ----
 
     async def _read_user_input(self) -> str:
-        """Leer input del usuario, juntando líneas pegadas como un solo mensaje.
+        """Leer input del usuario vía prompt_toolkit (async, bracketed paste).
 
-        Usa `asyncio.to_thread` para no bloquear el event loop con `input()`.
-        Después de la primera línea, chequea si hay más data buffereada
-        en stdin (señal de paste multilínea) y la concatena. Si el usuario
-        solo tipeó una línea y presionó Enter, devuelve solo eso.
+        prompt_toolkit corre el terminal en modo raw con bracketed paste
+        habilitado: un pegado multilínea entra COMPLETO como un solo bloque
+        (sin perder líneas ni auto-enviarse en los `\\n` internos) y se envía
+        recién cuando apretás Enter. Además da historial (flechas) y edición.
+
+        Si prompt_toolkit no está disponible (no debería: es dependencia), cae
+        a un `input()` plano por compatibilidad.
         """
-        return await asyncio.to_thread(self._read_user_input_sync)
+        session = self._ensure_prompt_session()
+        if session is None:  # pragma: no cover — fallback sin prompt_toolkit
+            return await asyncio.to_thread(input, "› ")
+        from prompt_toolkit.formatted_text import HTML  # noqa: PLC0415
 
-    def _read_user_input_sync(self) -> str:
-        """Versión bloqueante: lee primera línea, después drena el resto del paste.
+        return await session.prompt_async(HTML("<ansicyan><b>› </b></ansicyan>"))
 
-        Un paste multilínea cuya ÚLTIMA línea no termina en '\\n' (no apretaste
-        Enter al final) queda parcialmente retenido por el modo canónico del
-        terminal: las líneas completas se entregan, pero la última sin newline
-        se queda en el buffer. Para capturarla, drenamos lo pendiente en modo
-        no-canónico (ver `_drain_pending`). Sin esto, prompts largos pegados se
-        cortaban en la última línea — bug real observado en pruebas.
-        """
-        import select
-        import sys
-
-        first = self.renderer.console.input(_USER_PROMPT_MARKUP)
-
-        if not sys.stdin.isatty():
-            return first
-
-        # Detección de paste con latencia cero para input normal: si justo
-        # después del Enter NO hay más data pendiente, fue una sola línea.
-        try:
-            ready, _, _ = select.select([sys.stdin], [], [], 0.05)
-        except (OSError, ValueError):
-            return first
-        if not ready:
-            return first
-
-        lines = [first]
-
-        # 1) Drenar las líneas COMPLETAS (terminadas en '\n') vía readline.
-        #    Este paso ya funcionaba; nunca lo regresamos.
-        while True:
+    def _ensure_prompt_session(self) -> object | None:
+        """Lazy-crear la PromptSession (una sola vez por loop)."""
+        if self._prompt_session is None:
             try:
-                ready, _, _ = select.select([sys.stdin], [], [], 0.1)
-            except (OSError, ValueError):
-                break
-            if not ready:
-                break
-            try:
-                line = sys.stdin.readline()
-            except (EOFError, OSError):
-                break
-            if not line:
-                break
-            lines.append(line.rstrip("\n"))
+                from prompt_toolkit import PromptSession  # noqa: PLC0415
 
-        # 2) Capturar una posible ÚLTIMA línea sin '\n' que el modo canónico
-        #    retiene esperando un Enter (típico al pegar sin newline final).
-        tail = _read_incomplete_tail(sys.stdin.fileno())
-        if tail:
-            lines.extend(tail.split("\n"))
-
-        if len(lines) > 1:
-            self.renderer.render_info(
-                f"(detecté paste de {len(lines)} líneas, juntando como un mensaje)"
-            )
-        return "\n".join(lines)
+                self._prompt_session = PromptSession()
+            except ImportError:  # pragma: no cover — prompt_toolkit es dependencia
+                return None
+        return self._prompt_session
 
 
 # ---------------------------------------------------------------------------
@@ -645,52 +604,3 @@ def _format_args_summary(args: dict[str, Any], max_value_length: int = 30) -> st
 def _format_observation(tool_name: str, content: str) -> str:
     """Formatear el resultado de una tool como bloque <observation>."""
     return f'<observation tool="{tool_name}">\n{content}\n</observation>'
-
-
-def _read_incomplete_tail(fd: int) -> str:  # pragma: no cover — I/O de terminal
-    """Leer una última línea sin '\\n' que el modo canónico retiene en el buffer.
-
-    Cambia la tty a modo no-canónico con `TCSANOW` (que NO descarta el buffer
-    de entrada, a diferencia del `TCSAFLUSH` default de `tty.setcbreak`) para
-    que `os.read` entregue los bytes pendientes, y restaura el modo original.
-    Si termios no está disponible (Windows) o algo falla, devuelve "" — en ese
-    caso el caller se queda con las líneas completas que ya drenó (sin regresión).
-    """
-    import os
-    import select
-
-    try:
-        import termios
-    except ImportError:  # Windows
-        return ""
-
-    try:
-        old = termios.tcgetattr(fd)
-    except termios.error:
-        return ""
-
-    # Construimos los atributos no-canónicos a mano y aplicamos con TCSANOW
-    # para no flushear el input pendiente.
-    new = termios.tcgetattr(fd)
-    new[3] = new[3] & ~(termios.ICANON | termios.ECHO)  # lflags
-    new[6][termios.VMIN] = 0
-    new[6][termios.VTIME] = 0
-
-    chunks: list[str] = []
-    try:
-        termios.tcsetattr(fd, termios.TCSANOW, new)
-        while True:
-            ready, _, _ = select.select([fd], [], [], 0.1)
-            if not ready:
-                break
-            data = os.read(fd, 4096)
-            if not data:
-                break
-            chunks.append(data.decode("utf-8", errors="replace"))
-    except OSError:
-        pass
-    finally:
-        with contextlib.suppress(termios.error):
-            termios.tcsetattr(fd, termios.TCSANOW, old)
-
-    return "".join(chunks).rstrip("\n")

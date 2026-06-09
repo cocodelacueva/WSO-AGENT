@@ -360,6 +360,10 @@ logs/                  # audit trail de sesiones
 - [x] **Persistencia de historial entre sesiones** — opt-in vía
       `WSO_HISTORY_PERSIST`. Restaura la conversación al reabrir `wso`;
       `/reset` para empezar de cero.
+- [x] **Input del REPL con `prompt_toolkit`** — bracketed paste (pegás un
+      prompt multilínea entero, sin perder líneas ni auto-enviarse en los
+      saltos internos), historial (flechas) y edición de línea. Reemplaza el
+      `input()` canónico que truncaba pegados largos.
 
 **v4 (futuro):**
 - [ ] E2E manual del browser + endurecimiento (stealth, delays, session expiry).

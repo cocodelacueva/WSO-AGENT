@@ -18,6 +18,9 @@ dependencies = [
     "pydantic-settings>=2.3",
     "rich>=13.7",
     "python-dotenv>=1.0",
+    # Input del REPL: bracketed paste (pegado multilínea sin perder líneas),
+    # historial y edición de línea. Reemplaza el input canónico de la stdlib.
+    "prompt_toolkit>=3.0",
 ]
 
 [project.optional-dependencies]

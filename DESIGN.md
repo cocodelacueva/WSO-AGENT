@@ -319,7 +319,7 @@ wso/
 ├── main.py                       # entry point CLI; wiring final
 ├── config.py                     # Pydantic Settings; lee .env
 ├── agent/
-│   ├── loop.py                   # AgentLoop (orquestador)
+│   ├── loop.py                   # AgentLoop (orquestador; input vía prompt_toolkit)
 │   ├── parser.py                 # StreamingXMLParser
 │   ├── prompts.py                # build_system_prompt, load_context_files
 │   ├── budget.py                 # BudgetTracker, ask_continuation
