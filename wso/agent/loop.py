@@ -49,6 +49,11 @@ from wso.ui.console import ConsoleRenderer
 
 _USER_PROMPT_MARKUP = "[bold cyan]›[/] "
 
+# Tras esta cantidad de errores de modelo consecutivos (API caída, sin crédito,
+# modelo inexistente, auth), abortamos el turno en vez de reintentar en vano y
+# quemar llamadas pagas hasta agotar el budget.
+_MAX_CONSECUTIVE_MODEL_ERRORS = 3
+
 
 @dataclass
 class AgentLoop:
@@ -78,6 +83,8 @@ class AgentLoop:
     _turn_count: int = field(default=0, init=False, repr=False)
     _turn_started_monotonic: float = field(default=0.0, init=False, repr=False)
     _session_started_monotonic: float = field(default=0.0, init=False, repr=False)
+    _consecutive_model_errors: int = field(default=0, init=False, repr=False)
+    _last_model_error: str = field(default="", init=False, repr=False)
 
     # ---- API pública ----
 
@@ -208,9 +215,27 @@ class AgentLoop:
         """
         executed_tool = await self._run_model_until_tool()
         if executed_tool is None:
+            # Si el modelo viene fallando con errores duros (no un simple
+            # "no emitió tool"), abortamos en vez de reintentar al pedo.
+            if self._consecutive_model_errors >= _MAX_CONSECUTIVE_MODEL_ERRORS:
+                return self._abort_on_model_errors()
             return self._handle_no_tool_emitted()
 
         return await self._handle_tool_call(executed_tool)
+
+    def _abort_on_model_errors(self) -> bool:
+        """Terminar el turno tras errores de modelo consecutivos irrecuperables."""
+        self.renderer.render_error(
+            f"El modelo falló {self._consecutive_model_errors} veces seguidas. "
+            f"Abortando el turno. Último error: {self._last_model_error}"
+        )
+        self.session_log.log(
+            "error",
+            where="model_stream_abort",
+            message=self._last_model_error,
+            count=self._consecutive_model_errors,
+        )
+        return True
 
     async def _run_model_until_tool(self) -> ToolCallComplete | None:
         """Llamar al modelo, parsear streaming, parar al primer tool.
@@ -257,12 +282,16 @@ class AgentLoop:
             self.session_log.log(
                 "error", where="model_stream", message=str(e), kind=type(e).__name__
             )
+            self._consecutive_model_errors += 1
+            self._last_model_error = str(e)
             # Anexar error como observación para que el modelo lo vea si reintentamos
             self.history.append(
                 Message(role="assistant", content=full_response or "(sin respuesta)")
             )
             return None
 
+        # Respuesta recibida sin excepción: reseteamos el contador de errores.
+        self._consecutive_model_errors = 0
         self.history.append(Message(role="assistant", content=full_response))
         self.session_log.log("model_response", text=full_response)
         return executed_tool

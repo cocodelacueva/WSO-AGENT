@@ -45,6 +45,18 @@ class TestBuildSystemPrompt:
         assert "NO ALUCINES NOMBRES DE ARCHIVO" in prompt
         assert "LISTÁ EL DIRECTORIO" in prompt
 
+    def test_includes_browser_capability_section(self) -> None:
+        registry = load_builtin_tools()
+        prompt = build_system_prompt(registry)
+
+        # El modelo debe entender que maneja un navegador real y no rechazar
+        # tareas de browsing por "no puedo acceder a sitios web".
+        assert "tenés un navegador real" in prompt
+        assert "NUNCA digas" in prompt
+        assert "browser_read_page" in prompt
+        # Guardrail de integridad: no inventar datos de perfiles.
+        assert "NUNCA inventes" in prompt
+
     def test_includes_few_shot_example(self) -> None:
         registry = load_builtin_tools()
         prompt = build_system_prompt(registry)
