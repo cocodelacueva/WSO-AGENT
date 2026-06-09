@@ -619,6 +619,10 @@ flushea con un `ParseError` si quedó algo abierto.
 - Self-closing tags: `<tool name="ping" />`.
 - Char-by-char streaming: cada caracter por separado.
 - Múltiples bloques `<thinking>` antes de un `<tool>`.
+- Último arg abierto sin cerrar: el modelo emite `<slides_json>[...]` y
+  salta directo a `</tool>` olvidando `</slides_json>`. El parser captura
+  igual ese arg hasta el final del body (recovery observado con modelos
+  locales chicos en decks largos; evita loops de "Field required").
 - Determinismo: mismo input genera mismos eventos sin importar la
   fragmentación (test parametrizado).
 

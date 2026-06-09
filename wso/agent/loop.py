@@ -25,6 +25,7 @@ Flujo conceptual de una sesión:
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import time
 from dataclasses import dataclass, field
@@ -567,35 +568,62 @@ class AgentLoop:
         return await asyncio.to_thread(self._read_user_input_sync)
 
     def _read_user_input_sync(self) -> str:
-        """Versión bloqueante: lee primera línea, después drena buffered lines."""
+        """Versión bloqueante: lee primera línea, después drena el resto del paste.
+
+        Un paste multilínea cuya ÚLTIMA línea no termina en '\\n' (no apretaste
+        Enter al final) queda parcialmente retenido por el modo canónico del
+        terminal: las líneas completas se entregan, pero la última sin newline
+        se queda en el buffer. Para capturarla, drenamos lo pendiente en modo
+        no-canónico (ver `_drain_pending`). Sin esto, prompts largos pegados se
+        cortaban en la última línea — bug real observado en pruebas.
+        """
         import select
         import sys
 
         first = self.renderer.console.input(_USER_PROMPT_MARKUP)
-        lines = [first]
 
-        # Si después del Enter hay más data esperando en stdin, fue un paste.
-        # Drenamos todas las líneas buffereadas y las juntamos.
-        # Solo aplica si stdin es un TTY (no aplica a pipes ni archivos).
         if not sys.stdin.isatty():
             return first
 
-        while True:
+        # Detección de paste con latencia cero para input normal: si justo
+        # después del Enter NO hay más data pendiente, fue una sola línea.
+        try:
             ready, _, _ = select.select([sys.stdin], [], [], 0.05)
+        except (OSError, ValueError):
+            return first
+        if not ready:
+            return first
+
+        lines = [first]
+
+        # 1) Drenar las líneas COMPLETAS (terminadas en '\n') vía readline.
+        #    Este paso ya funcionaba; nunca lo regresamos.
+        while True:
+            try:
+                ready, _, _ = select.select([sys.stdin], [], [], 0.1)
+            except (OSError, ValueError):
+                break
             if not ready:
                 break
             try:
-                lines.append(sys.stdin.readline().rstrip("\n"))
+                line = sys.stdin.readline()
             except (EOFError, OSError):
                 break
+            if not line:
+                break
+            lines.append(line.rstrip("\n"))
+
+        # 2) Capturar una posible ÚLTIMA línea sin '\n' que el modo canónico
+        #    retiene esperando un Enter (típico al pegar sin newline final).
+        tail = _read_incomplete_tail(sys.stdin.fileno())
+        if tail:
+            lines.extend(tail.split("\n"))
 
         if len(lines) > 1:
-            joined = "\n".join(lines)
             self.renderer.render_info(
                 f"(detecté paste de {len(lines)} líneas, juntando como un mensaje)"
             )
-            return joined
-        return first
+        return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -617,3 +645,52 @@ def _format_args_summary(args: dict[str, Any], max_value_length: int = 30) -> st
 def _format_observation(tool_name: str, content: str) -> str:
     """Formatear el resultado de una tool como bloque <observation>."""
     return f'<observation tool="{tool_name}">\n{content}\n</observation>'
+
+
+def _read_incomplete_tail(fd: int) -> str:  # pragma: no cover — I/O de terminal
+    """Leer una última línea sin '\\n' que el modo canónico retiene en el buffer.
+
+    Cambia la tty a modo no-canónico con `TCSANOW` (que NO descarta el buffer
+    de entrada, a diferencia del `TCSAFLUSH` default de `tty.setcbreak`) para
+    que `os.read` entregue los bytes pendientes, y restaura el modo original.
+    Si termios no está disponible (Windows) o algo falla, devuelve "" — en ese
+    caso el caller se queda con las líneas completas que ya drenó (sin regresión).
+    """
+    import os
+    import select
+
+    try:
+        import termios
+    except ImportError:  # Windows
+        return ""
+
+    try:
+        old = termios.tcgetattr(fd)
+    except termios.error:
+        return ""
+
+    # Construimos los atributos no-canónicos a mano y aplicamos con TCSANOW
+    # para no flushear el input pendiente.
+    new = termios.tcgetattr(fd)
+    new[3] = new[3] & ~(termios.ICANON | termios.ECHO)  # lflags
+    new[6][termios.VMIN] = 0
+    new[6][termios.VTIME] = 0
+
+    chunks: list[str] = []
+    try:
+        termios.tcsetattr(fd, termios.TCSANOW, new)
+        while True:
+            ready, _, _ = select.select([fd], [], [], 0.1)
+            if not ready:
+                break
+            data = os.read(fd, 4096)
+            if not data:
+                break
+            chunks.append(data.decode("utf-8", errors="replace"))
+    except OSError:
+        pass
+    finally:
+        with contextlib.suppress(termios.error):
+            termios.tcsetattr(fd, termios.TCSANOW, old)
+
+    return "".join(chunks).rstrip("\n")

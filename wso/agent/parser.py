@@ -112,6 +112,12 @@ _TOOL_CLOSE_RE = re.compile(r"<\s*/\s*tool\s*>", re.IGNORECASE)
 # Note: case-sensitive para arg names (deben matchear la signature exacta).
 _ARG_RE = re.compile(r"<\s*(\w+)\s*>(.*?)<\s*/\s*\1\s*>", re.DOTALL)
 
+# Tolerancia: arg abierto SIN cerrar al final del body. Los modelos chicos a
+# veces emiten `<slides_json>[...]` y saltan directo a `</tool>` olvidando el
+# `</slides_json>`. Capturamos ese último arg hasta el final del body para no
+# perder el contenido (y evitar loops de "Field required"). Ver DESIGN 3.17/3.18.
+_UNCLOSED_ARG_RE = re.compile(r"<\s*(\w+)\s*>(.*)\Z", re.DOTALL)
+
 # CDATA wrap: algunos modelos envuelven el contenido en <![CDATA[...]]>
 # pensando que escapan caracteres XML. Lo strippeamos para no contaminar
 # HTML/CSS/JS escritos vía write_file.
@@ -313,14 +319,30 @@ class StreamingXMLParser:
     def _parse_tool_body(self, body: str) -> dict[str, str]:
         """Extraer pares <arg>value</arg> del body de un <tool>.
 
+        Tolera un último arg abierto sin cerrar (el modelo olvidó `</arg>`
+        antes de `</tool>`): su contenido se captura hasta el final del body.
+
         Note:
             No soporta XML anidado en valores (limitación conocida v1).
         """
         args: dict[str, str] = {}
+        last_end = 0
         for match in _ARG_RE.finditer(body):
             name = match.group(1)
             value = _strip_cdata(match.group(2).strip())
             args[name] = value
+            last_end = match.end()
+
+        # Recovery del último arg sin cerrar: buscamos un `<arg>` abierto en lo
+        # que quedó del body (después del último arg bien cerrado) sin su
+        # `</arg>` correspondiente, y tomamos su contenido hasta el final.
+        tail = body[last_end:]
+        unclosed = _UNCLOSED_ARG_RE.search(tail)
+        if unclosed:
+            name = unclosed.group(1)
+            value = _strip_cdata(unclosed.group(2).strip())
+            if name not in args and value:
+                args[name] = value
         return args
 
     # ---- Reset ----
