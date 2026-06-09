@@ -39,7 +39,7 @@ python -m wso.main
 cd /Users/coco/Documents/DESAROLLO/wso-ai-harness
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e ".[all]"
 wso
 ```
 
@@ -170,6 +170,84 @@ los modelos chicos: `layout` opcional (default `content`), `content`/
 de `slides_json`. Esto reduce los errores de validación en vueltas con
 modelos locales.
 
+### Browser bridge (v0.3, en progreso)
+
+WSO puede manejar tu **Chrome real** para operar apps web sin API
+(LinkedIn, Sales Navigator, dashboards internos). No arranca un Chrome
+propio: se attachea por CDP a uno que vos iniciás, reutilizando tus
+cookies y sesiones logueadas. LinkedIn ve tu navegador, no un bot.
+
+Instalá la extra y el binario de Playwright:
+
+```bash
+pip install -e ".[browser]"
+# (para attach puro por CDP no hace falta `playwright install`)
+```
+
+Arrancá Chrome con remote debugging (perfil aislado, recomendado):
+
+```bash
+./scripts/launch-chrome-cdp.sh            # Mac/Linux
+# Windows: .\scripts\launch-chrome-cdp.ps1
+```
+
+La primera vez logueate en los sitios que vayas a usar dentro de esa
+ventana aislada (`~/.wso-chrome`); la sesión queda persistida. Con
+`--default` usás tu perfil real (más cómodo, menos seguro; cerrá las
+otras ventanas de Chrome antes).
+
+Configurá el endpoint (default ya alineado con el script):
+
+```env
+WSO_BROWSER_CDP_URL=http://localhost:9222
+```
+
+Tools disponibles: `browser_open_tab`, `browser_navigate`,
+`browser_close_tab`, `browser_read_page`, `browser_screenshot`,
+`browser_click`, `browser_type`, `browser_wait_for`, `browser_scroll`.
+
+Permisos: las acciones de browser (navegar, click, type) son categoría
+`BROWSER` y **nunca se auto-aprueban por default**. Aprobar una
+navegación "por sesión" (`s`) habilita futuras navegaciones al mismo
+dominio. Nada de browser se persiste entre sesiones.
+
+Antes de codear esto validamos el attach con `scripts/spike_cdp_attach.py`
+(lee tus tabs y el texto de Sales Navigator sin tocar nada).
+
+### run_python (escape hatch)
+
+Para tareas que no tienen una tool dedicada, el modelo puede escribir
+Python y ejecutarlo con `run_python`. Corre en un **subprocess
+contenido**: aislado (`python -I`), cwd en `workspace/run`, con timeout,
+resource limits (Unix) y **sin acceso a red**. Cada corrida pide
+aprobación (categoría `EXECUTE`, sin auto-aprobación).
+
+Puede importar toda la stdlib y leer/escribir archivos como cualquier
+proceso tuyo; la contención apunta a frenar accidentes y corridas
+colgadas, con tu aprobación como gate real. Ajustable en `.env`:
+
+```env
+WSO_RUN_PYTHON_TIMEOUT=30           # segundos (default y tope)
+WSO_RUN_PYTHON_MAX_MEMORY_MB=512    # RLIMIT_AS en Linux
+WSO_RUN_PYTHON_MAX_OUTPUT_CHARS=16000
+```
+
+### Persistencia de historial entre sesiones
+
+Por default, cada vez que abrís `wso` arranca sin memoria de la sesión
+anterior. Activando el flag, la conversación se guarda tras cada turno y
+se restaura al reabrir:
+
+```env
+WSO_HISTORY_PERSIST=true
+WSO_HISTORY_MAX_MESSAGES=200    # se conservan los últimos N mensajes
+```
+
+Se persisten solo los mensajes user/assistant (el system prompt se
+reconstruye en cada arranque). El archivo (`.wso_history.json`) usa
+escritura atómica y está en `.gitignore`. En el REPL, el comando
+`/reset` (o `/olvidar`) borra el historial guardado y empieza de cero.
+
 ### Logging estructurado de sesiones
 
 Para activar logging de cada sesión, configurá en `.env`:
@@ -262,13 +340,37 @@ logs/                  # audit trail de sesiones
       `content`→`bullets`, alias `slides`), guardrails de rutas/archivos en
       el system prompt, `num_ctx` default 16384 y `max_chars` en lecturas
 
-**v3 (futuro):**
-- [ ] **Browser bridge mínimo** — el agente maneja tu Chrome real
+**v3 (en progreso):**
+- [x] **Spike de validación CDP** — confirmado que Playwright + CDP attach
+      lee Sales Navigator real con la sesión logueada y sin detección de
+      automation (`navigator.webdriver=false`). Ver `scripts/`.
+- [x] **Browser bridge mínimo** — el agente maneja tu Chrome real
       (vía Playwright + CDP attach), reutilizando tus sesiones logueadas.
-      Tools: `browser_open_tab`, `browser_navigate`, `browser_read_page`,
-      `browser_click`, `browser_type`, `browser_screenshot`, `browser_wait_for`.
-      Reemplaza el approach LinkedIn-RSS (no viable: LinkedIn bloquea y
-      Sales Navigator no expone RSS). Ver DESIGN.md, apéndice "Browser bridge".
+      9 tools (`browser_open_tab`, `browser_navigate`, `browser_close_tab`,
+      `browser_read_page`, `browser_screenshot`, `browser_click`,
+      `browser_type`, `browser_wait_for`, `browser_scroll`), categoría de
+      permiso `BROWSER` con sticky por dominio. Reemplaza el approach LinkedIn-RSS (no viable:
+      LinkedIn bloquea y Sales Navigator no expone RSS). Ver DESIGN.md,
+      apéndice "Browser bridge".
+- [ ] E2E manual contra LinkedIn/Sales Navigator y endurecimiento
+      (stealth, delays, detección de session expiry).
+- [x] **`run_python`** — escape hatch del patrón híbrido: el modelo escribe
+      Python y se ejecuta en un subprocess contenido (aislado, cwd
+      `workspace/run`, timeout, sin red, gateado por permiso EXECUTE).
+- [x] **Persistencia de historial entre sesiones** — opt-in vía
+      `WSO_HISTORY_PERSIST`. Restaura la conversación al reabrir `wso`;
+      `/reset` para empezar de cero.
+- [x] **Input del REPL con `prompt_toolkit`** — bracketed paste (pegás un
+      prompt multilínea entero, sin perder líneas ni auto-enviarse en los
+      saltos internos), historial (flechas) y edición de línea. Reemplaza el
+      `input()` canónico que truncaba pegados largos.
+
+**v4 (futuro):**
+- [ ] E2E manual del browser + endurecimiento (stealth, delays, session expiry).
+- [ ] Memoria de largo plazo (RAG sobre `/context`).
+- [ ] Modo no-conversacional para batch jobs (`wso --task "..."`).
+- [ ] Tools async (HTTP, base de datos).
+- [ ] Editar args antes de aprobar (en lugar de solo y/n).
 - [ ] `run_python` con sandbox (subprocess aislado + cwd limitado + timeout)
 - [ ] Persistencia de historial entre sesiones
 - [ ] Memoria de largo plazo (RAG sobre `/context`)

@@ -682,3 +682,73 @@ class TestSessionLogIntegration:
         perm = next(e for e in events if e["event"] == "permission")
         assert perm["decision"] == "auto_approved"
         assert perm["tool"] == "responder_al_usuario"
+
+
+# ---------------------------------------------------------------------------
+# Aborto tras errores de modelo consecutivos (API caída / sin crédito)
+# ---------------------------------------------------------------------------
+
+
+class _FailingModel(ModelClient):
+    """Model client que siempre lanza al hacer stream_chat."""
+
+    def __init__(self, message: str = "credit balance too low") -> None:
+        self._message = message
+        self.calls = 0
+
+    @property
+    def model_name(self) -> str:
+        return "failing-model"
+
+    async def stream_chat(self, messages):  # type: ignore[no-untyped-def]
+        self.calls += 1
+        raise RuntimeError(self._message)
+        yield ""  # pragma: no cover — lo hace generator
+
+
+class TestModelErrorAbort:
+    @pytest.mark.asyncio
+    async def test_aborts_after_consecutive_model_errors(
+        self,
+        settings: FakeSettings,
+        renderer: ConsoleRenderer,
+        tools_registry,
+        buffer: StringIO,
+    ) -> None:
+        from wso.agent.loop import _MAX_CONSECUTIVE_MODEL_ERRORS
+
+        model = _FailingModel("Your credit balance is too low")
+        permissions = PermissionManager(settings=settings)  # type: ignore[arg-type]
+        loop = AgentLoop(
+            model=model,
+            tools=tools_registry,
+            permissions=permissions,
+            renderer=renderer,
+            system_prompt=build_system_prompt(tools_registry),
+        )
+
+        await loop.execute_turn("hacé algo")
+
+        # Aborta tras N errores, sin reintentar hasta agotar el budget (10).
+        assert model.calls == _MAX_CONSECUTIVE_MODEL_ERRORS
+        assert "Abortando el turno" in buffer.getvalue()
+        assert "credit balance" in buffer.getvalue()
+
+    @pytest.mark.asyncio
+    async def test_counter_resets_after_success(
+        self,
+        settings: FakeSettings,
+        renderer: ConsoleRenderer,
+        tools_registry,
+    ) -> None:
+        # Un response válido en medio resetea el contador de errores.
+        loop, model = make_loop(
+            [
+                '<tool name="responder_al_usuario"><mensaje>ok</mensaje></tool>',
+            ],
+            settings,
+            renderer,
+            tools_registry,
+        )
+        await loop.execute_turn("hola")
+        assert loop._consecutive_model_errors == 0

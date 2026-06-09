@@ -39,6 +39,7 @@ from wso.agent.parser import (
     ThinkingEnd,
     ToolCallComplete,
 )
+from wso.history_store import HistoryStore
 from wso.permissions.manager import PermissionDecision, PermissionManager
 from wso.permissions.prompts import ApprovalChoice, ask_approval
 from wso.session_log import SessionLogger
@@ -46,7 +47,10 @@ from wso.tools.base import PermissionCategory, ToolDefinition
 from wso.tools.registry import ToolRegistry
 from wso.ui.console import ConsoleRenderer
 
-_USER_PROMPT_MARKUP = "[bold cyan]›[/] "
+# Tras esta cantidad de errores de modelo consecutivos (API caída, sin crédito,
+# modelo inexistente, auth), abortamos el turno en vez de reintentar en vano y
+# quemar llamadas pagas hasta agotar el budget.
+_MAX_CONSECUTIVE_MODEL_ERRORS = 3
 
 
 @dataclass
@@ -70,9 +74,16 @@ class AgentLoop:
     session_log: SessionLogger = field(
         default_factory=lambda: SessionLogger(log_dir=None)
     )
+    history_store: HistoryStore = field(
+        default_factory=lambda: HistoryStore(path=None)
+    )
+    """Persistencia del historial entre sesiones. No-op por default."""
     _turn_count: int = field(default=0, init=False, repr=False)
     _turn_started_monotonic: float = field(default=0.0, init=False, repr=False)
     _session_started_monotonic: float = field(default=0.0, init=False, repr=False)
+    _consecutive_model_errors: int = field(default=0, init=False, repr=False)
+    _last_model_error: str = field(default="", init=False, repr=False)
+    _prompt_session: object | None = field(default=None, init=False, repr=False)
 
     # ---- API pública ----
 
@@ -106,6 +117,11 @@ class AgentLoop:
                 if not user_input:
                     continue
 
+                # Comando para olvidar el historial (persistido y en memoria).
+                if user_input.lower() in ("/reset", "/olvidar"):
+                    self._reset_history()
+                    continue
+
                 self.renderer.render_separator()
 
                 try:
@@ -128,6 +144,13 @@ class AgentLoop:
                 duration_ms=int((time.monotonic() - self._session_started_monotonic) * 1000),
             )
             self.session_log.close()
+
+    def _reset_history(self) -> None:
+        """Olvidar el historial: en memoria y el persistido en disco."""
+        self.history.clear()
+        self.history_store.clear()
+        self.session_log.log("history_reset")
+        self.renderer.render_info("Historial borrado. Empezamos de cero.")
 
     async def execute_turn(self, user_input: str) -> None:
         """Ejecutar un turno completo desde un input del usuario.
@@ -177,6 +200,8 @@ class AgentLoop:
                 steps=len(self.budget.history),
                 duration_ms=int((time.monotonic() - self._turn_started_monotonic) * 1000),
             )
+            # Persistir el historial tras cada turno (no-op si está deshabilitado).
+            self.history_store.save(self.history)
 
     # ---- Loop interno: un paso ----
 
@@ -189,9 +214,27 @@ class AgentLoop:
         """
         executed_tool = await self._run_model_until_tool()
         if executed_tool is None:
+            # Si el modelo viene fallando con errores duros (no un simple
+            # "no emitió tool"), abortamos en vez de reintentar al pedo.
+            if self._consecutive_model_errors >= _MAX_CONSECUTIVE_MODEL_ERRORS:
+                return self._abort_on_model_errors()
             return self._handle_no_tool_emitted()
 
         return await self._handle_tool_call(executed_tool)
+
+    def _abort_on_model_errors(self) -> bool:
+        """Terminar el turno tras errores de modelo consecutivos irrecuperables."""
+        self.renderer.render_error(
+            f"El modelo falló {self._consecutive_model_errors} veces seguidas. "
+            f"Abortando el turno. Último error: {self._last_model_error}"
+        )
+        self.session_log.log(
+            "error",
+            where="model_stream_abort",
+            message=self._last_model_error,
+            count=self._consecutive_model_errors,
+        )
+        return True
 
     async def _run_model_until_tool(self) -> ToolCallComplete | None:
         """Llamar al modelo, parsear streaming, parar al primer tool.
@@ -238,12 +281,16 @@ class AgentLoop:
             self.session_log.log(
                 "error", where="model_stream", message=str(e), kind=type(e).__name__
             )
+            self._consecutive_model_errors += 1
+            self._last_model_error = str(e)
             # Anexar error como observación para que el modelo lo vea si reintentamos
             self.history.append(
                 Message(role="assistant", content=full_response or "(sin respuesta)")
             )
             return None
 
+        # Respuesta recibida sin excepción: reseteamos el contador de errores.
+        self._consecutive_model_errors = 0
         self.history.append(Message(role="assistant", content=full_response))
         self.session_log.log("model_response", text=full_response)
         return executed_tool
@@ -435,11 +482,25 @@ class AgentLoop:
             )
             return False
 
-        # Aprobaciones que persisten
+        # Aprobaciones que persisten.
+        # Las tools BROWSER nunca persisten entre sesiones (decisión A.5):
+        # tanto 's' como 'a' se recuerdan solo por sesión, con sticky por
+        # dominio cuando la tool navega a una URL.
+        is_browser = tool_def.category == PermissionCategory.BROWSER
         if response.choice == ApprovalChoice.APPROVE_SESSION:
-            self.permissions.remember_session(tool_def.name, args)
+            if is_browser:
+                self.permissions.remember_browser_session(tool_def.name, args)
+            else:
+                self.permissions.remember_session(tool_def.name, args)
         elif response.choice == ApprovalChoice.APPROVE_ALWAYS:
-            self.permissions.remember_always(tool_def.name, args)
+            if is_browser:
+                self.renderer.render_info(
+                    "Las acciones de browser solo se recuerdan por sesión "
+                    "(no se persisten). Aplicando para esta sesión."
+                )
+                self.permissions.remember_browser_session(tool_def.name, args)
+            else:
+                self.permissions.remember_always(tool_def.name, args)
         # APPROVE_ONCE: simplemente seguimos
 
         return True
@@ -495,45 +556,33 @@ class AgentLoop:
     # ---- I/O ----
 
     async def _read_user_input(self) -> str:
-        """Leer input del usuario, juntando líneas pegadas como un solo mensaje.
+        """Leer input del usuario vía prompt_toolkit (async, bracketed paste).
 
-        Usa `asyncio.to_thread` para no bloquear el event loop con `input()`.
-        Después de la primera línea, chequea si hay más data buffereada
-        en stdin (señal de paste multilínea) y la concatena. Si el usuario
-        solo tipeó una línea y presionó Enter, devuelve solo eso.
+        prompt_toolkit corre el terminal en modo raw con bracketed paste
+        habilitado: un pegado multilínea entra COMPLETO como un solo bloque
+        (sin perder líneas ni auto-enviarse en los `\\n` internos) y se envía
+        recién cuando apretás Enter. Además da historial (flechas) y edición.
+
+        Si prompt_toolkit no está disponible (no debería: es dependencia), cae
+        a un `input()` plano por compatibilidad.
         """
-        return await asyncio.to_thread(self._read_user_input_sync)
+        session = self._ensure_prompt_session()
+        if session is None:  # pragma: no cover — fallback sin prompt_toolkit
+            return await asyncio.to_thread(input, "› ")
+        from prompt_toolkit.formatted_text import HTML  # noqa: PLC0415
 
-    def _read_user_input_sync(self) -> str:
-        """Versión bloqueante: lee primera línea, después drena buffered lines."""
-        import select
-        import sys
+        return await session.prompt_async(HTML("<ansicyan><b>› </b></ansicyan>"))
 
-        first = self.renderer.console.input(_USER_PROMPT_MARKUP)
-        lines = [first]
-
-        # Si después del Enter hay más data esperando en stdin, fue un paste.
-        # Drenamos todas las líneas buffereadas y las juntamos.
-        # Solo aplica si stdin es un TTY (no aplica a pipes ni archivos).
-        if not sys.stdin.isatty():
-            return first
-
-        while True:
-            ready, _, _ = select.select([sys.stdin], [], [], 0.05)
-            if not ready:
-                break
+    def _ensure_prompt_session(self) -> object | None:
+        """Lazy-crear la PromptSession (una sola vez por loop)."""
+        if self._prompt_session is None:
             try:
-                lines.append(sys.stdin.readline().rstrip("\n"))
-            except (EOFError, OSError):
-                break
+                from prompt_toolkit import PromptSession  # noqa: PLC0415
 
-        if len(lines) > 1:
-            joined = "\n".join(lines)
-            self.renderer.render_info(
-                f"(detecté paste de {len(lines)} líneas, juntando como un mensaje)"
-            )
-            return joined
-        return first
+                self._prompt_session = PromptSession()
+            except ImportError:  # pragma: no cover — prompt_toolkit es dependencia
+                return None
+        return self._prompt_session
 
 
 # ---------------------------------------------------------------------------

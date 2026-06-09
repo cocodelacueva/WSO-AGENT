@@ -26,6 +26,7 @@ from enum import Enum
 from fnmatch import fnmatch
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from wso.config import Settings
 from wso.tools.base import PermissionCategory, ToolDefinition
@@ -88,6 +89,13 @@ class PermissionManager:
         default_factory=set, init=False
     )
     _always_allows: list[AlwaysAllowRule] = field(default_factory=list, init=False)
+    _browser_session_allows: set[tuple[str, str]] = field(
+        default_factory=set, init=False
+    )
+    """Sticky de browser por sesión: pares (grupo, dominio). Las tools de
+    navegación (open_tab, navigate) comparten el grupo 'navigate', así
+    aprobar una cubre futuras navegaciones al mismo dominio. No persiste
+    entre sesiones (decisión de diseño A.5: nada `always` para browser)."""
 
     def __post_init__(self) -> None:
         self._read_whitelist = [
@@ -116,6 +124,17 @@ class PermissionManager:
             if isinstance(path_arg, str) and self._path_in_read_whitelist(path_arg):
                 return PermissionDecision.AUTO_APPROVED
 
+        # 2b. BROWSER con dominio en el sticky de sesión → auto
+        if tool.category == PermissionCategory.BROWSER:
+            domain = self._browser_domain(args)
+            if domain is not None:
+                group = self._browser_group(tool.name)
+                if any(
+                    g == group and self._domain_matches(domain, allowed)
+                    for (g, allowed) in self._browser_session_allows
+                ):
+                    return PermissionDecision.AUTO_APPROVED
+
         # 3. Always-allows
         if any(rule.matches(tool.name, args) for rule in self._always_allows):
             return PermissionDecision.AUTO_APPROVED
@@ -129,6 +148,20 @@ class PermissionManager:
     def remember_session(self, tool_name: str, args: dict[str, Any]) -> None:
         """Aprobar esta tool call para el resto de la sesión (exact match)."""
         self._session_allows.add((tool_name, self._args_signature(args)))
+
+    def remember_browser_session(self, tool_name: str, args: dict[str, Any]) -> None:
+        """Aprobar una tool de browser para la sesión, sticky por dominio.
+
+        Si la tool trae una `url` (navegación), recuerda el dominio para que
+        futuras navegaciones del mismo grupo al mismo dominio (o subdominios)
+        se auto-aprueben. Si no hay `url` (click, type, close_tab), cae al
+        sticky genérico de sesión por args exactos.
+        """
+        domain = self._browser_domain(args)
+        if domain is not None:
+            self._browser_session_allows.add((self._browser_group(tool_name), domain))
+        else:
+            self.remember_session(tool_name, args)
 
     def remember_always(self, tool_name: str, args: dict[str, Any]) -> None:
         """Aprobar siempre, persistiendo en permissions.toml.
@@ -166,6 +199,10 @@ class PermissionManager:
     def always_allow_rules(self) -> list[AlwaysAllowRule]:
         return list(self._always_allows)
 
+    @property
+    def browser_session_allows(self) -> set[tuple[str, str]]:
+        return set(self._browser_session_allows)
+
     # ---- Helpers internos ----
 
     @staticmethod
@@ -196,6 +233,34 @@ class PermissionManager:
     def _args_signature(args: dict[str, Any]) -> frozenset[tuple[str, str]]:
         """Firma estable de un dict de args, comparable entre llamadas."""
         return frozenset((k, str(v)) for k, v in args.items())
+
+    # ---- Browser sticky ----
+
+    # Las tools de navegación comparten grupo: aprobar la navegación a un
+    # dominio cubre tanto open_tab como navigate a ese dominio.
+    _BROWSER_NAV_TOOLS = frozenset({"browser_open_tab", "browser_navigate"})
+
+    @classmethod
+    def _browser_group(cls, tool_name: str) -> str:
+        """Grupo de sticky para una tool de browser."""
+        return "navigate" if tool_name in cls._BROWSER_NAV_TOOLS else tool_name
+
+    @staticmethod
+    def _browser_domain(args: dict[str, Any]) -> str | None:
+        """Extraer el dominio normalizado (sin 'www.') del arg `url`, si hay."""
+        url = args.get("url")
+        if not isinstance(url, str):
+            return None
+        host = urlparse(url).hostname
+        if not host:
+            return None
+        host = host.lower()
+        return host[4:] if host.startswith("www.") else host
+
+    @staticmethod
+    def _domain_matches(target: str, allowed: str) -> bool:
+        """True si `target` es `allowed` o un subdominio suyo."""
+        return target == allowed or target.endswith("." + allowed)
 
     # ---- Persistencia ----
 

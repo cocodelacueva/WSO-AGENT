@@ -43,6 +43,9 @@ class PermissionCategory(str, Enum):  # noqa: UP042 — StrEnum es 3.11+; manten
     DELETE = "delete"
     NETWORK = "network"
     EXECUTE = "execute"
+    BROWSER = "browser"
+    """Tools que manejan el navegador real (navegar, click, type). Nunca
+    auto-aprobadas por default; sticky por dominio a nivel de sesión."""
     FLOW = "flow"
     """Tools de control de flujo (responder, preguntar). No piden permiso."""
 

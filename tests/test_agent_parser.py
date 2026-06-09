@@ -426,3 +426,64 @@ class TestDeterminism:
         baseline_tools = [e for e in baseline if isinstance(e, ToolCallComplete)]
         split_tools = [e for e in split if isinstance(e, ToolCallComplete)]
         assert baseline_tools == split_tools
+
+
+# ---------------------------------------------------------------------------
+# Tolerancia: último arg abierto sin cerrar (modelo olvida </arg>)
+# ---------------------------------------------------------------------------
+
+
+def _tool_events(events: list[ParseEvent]) -> list[ToolCallComplete]:
+    return [e for e in events if isinstance(e, ToolCallComplete)]
+
+
+class TestUnclosedLastArg:
+    def test_captures_unclosed_last_arg(self) -> None:
+        # El modelo olvidó </slides_json> y saltó directo a </tool>.
+        text = (
+            '<tool name="generate_pptx">'
+            "<output_path>/tmp/out.pptx</output_path>"
+            '<slides_json>[{"layout":"title","title":"X"}]</tool>'
+        )
+        tools = _tool_events(parse_chunks(text))
+        assert len(tools) == 1
+        args = tools[0].args
+        assert args["output_path"] == "/tmp/out.pptx"
+        assert args["slides_json"] == '[{"layout":"title","title":"X"}]'
+
+    def test_unclosed_arg_streamed_char_by_char(self) -> None:
+        text = (
+            '<tool name="generate_pptx">'
+            "<output_path>/tmp/o.pptx</output_path>"
+            '<slides_json>[{"a":1}]</tool>'
+        )
+        tools = _tool_events(parse_chunks(*list(text)))
+        assert len(tools) == 1
+        assert tools[0].args["slides_json"] == '[{"a":1}]'
+
+    def test_well_closed_args_still_work(self) -> None:
+        # No debe romper el caso normal (todos los args cerrados).
+        text = (
+            '<tool name="write_file">'
+            "<path>/tmp/x.txt</path>"
+            "<content>hola</content>"
+            "</tool>"
+        )
+        tools = _tool_events(parse_chunks(text))
+        assert tools[0].args == {"path": "/tmp/x.txt", "content": "hola"}
+
+    def test_no_spurious_arg_when_all_closed(self) -> None:
+        # Si no hay arg sin cerrar, no se inventa ninguno.
+        text = '<tool name="read_file"><path>/tmp/a</path></tool>'
+        tools = _tool_events(parse_chunks(text))
+        assert tools[0].args == {"path": "/tmp/a"}
+
+    def test_unclosed_arg_does_not_override_closed(self) -> None:
+        # Un arg ya capturado (cerrado) no se pisa por el recovery.
+        text = (
+            '<tool name="t">'
+            "<a>cerrado</a>"
+            "<b>sin cerrar</tool>"
+        )
+        tools = _tool_events(parse_chunks(text))
+        assert tools[0].args == {"a": "cerrado", "b": "sin cerrar"}

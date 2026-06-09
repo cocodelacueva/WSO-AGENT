@@ -23,6 +23,9 @@ workspace/context/whitesuit_template.pptx
 .env.local
 config/permissions.toml
 
+# Historial persistido entre sesiones (estado local, no se commitea)
+.wso_history.json
+
 # Logs (session_*.jsonl + cualquier otro formato futuro)
 logs/*
 !logs/.gitkeep
@@ -30,6 +33,9 @@ logs/*
 # Output del agente (entregables generados)
 workspace/output/*
 !workspace/output/.gitkeep
+
+# Sandbox de run_python (scripts temporales y archivos que cree el código)
+workspace/run/
 
 # Sistema
 .DS_Store

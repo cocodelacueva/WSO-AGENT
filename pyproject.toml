@@ -18,6 +18,9 @@ dependencies = [
     "pydantic-settings>=2.3",
     "rich>=13.7",
     "python-dotenv>=1.0",
+    # Input del REPL: bracketed paste (pegado multilínea sin perder líneas),
+    # historial y edición de línea. Reemplaza el input canónico de la stdlib.
+    "prompt_toolkit>=3.0",
 ]
 
 [project.optional-dependencies]
@@ -40,6 +43,8 @@ office = [
     "pypdf>=4.0",
     "python-docx>=1.1",
 ]
+# Browser bridge (v0.3): attach por CDP a tu Chrome real vía Playwright.
+browser = ["playwright>=1.40"]
 # Meta-extra: todo lo opcional de una. Útil para desarrollo activo.
 # Equivalente a [dev,office,google,anthropic,openai].
 all = [
@@ -55,6 +60,7 @@ all = [
     "google-generativeai>=0.8",
     "anthropic>=0.40",
     "openai>=1.50",
+    "playwright>=1.40",
 ]
 
 [project.scripts]

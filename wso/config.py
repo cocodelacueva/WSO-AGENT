@@ -56,6 +56,13 @@ class Settings(BaseSettings):
     # cloud_provider="openai". Si es None usa la API default de OpenAI.
     openai_base_url: str | None = None
 
+    # --- Browser bridge (v0.3) ---
+    browser_cdp_url: str = "http://localhost:9222"
+    """Endpoint CDP del Chrome real al que se attachea el browser bridge.
+    El usuario arranca Chrome con remote debugging vía
+    scripts/launch-chrome-cdp.sh (default port 9222). El agente NO arranca
+    un Chrome propio: se conecta a este, reutilizando sesiones/cookies."""
+
     # --- API Keys (sin prefijo WSO_, son convenciones globales) ---
     anthropic_api_key: SecretStr | None = Field(default=None, alias="ANTHROPIC_API_KEY")
     openai_api_key: SecretStr | None = Field(default=None, alias="OPENAI_API_KEY")
@@ -79,6 +86,11 @@ class Settings(BaseSettings):
         return self.workspace_dir / "output"
 
     @property
+    def run_dir(self) -> Path:
+        """cwd del sandbox de run_python. Los scripts se ejecutan acá."""
+        return self.workspace_dir / "run"
+
+    @property
     def config_dir(self) -> Path:
         return PROJECT_ROOT / "config"
 
@@ -90,9 +102,37 @@ class Settings(BaseSettings):
     def logs_dir(self) -> Path:
         return PROJECT_ROOT / "logs"
 
+    @property
+    def history_file(self) -> Path:
+        """Archivo donde se persiste el historial entre sesiones."""
+        return PROJECT_ROOT / ".wso_history.json"
+
     # --- Constantes del loop ---
     step_budget: int = 10
     """Cantidad máxima de tool calls antes de pedir continuación."""
+
+    # --- run_python (sandbox) ---
+    run_python_timeout: int = 30
+    """Timeout default (segundos) para run_python. También actúa como tope:
+    el modelo no puede pedir más que esto."""
+
+    run_python_max_memory_mb: int = 512
+    """Límite de memoria (RLIMIT_AS) del subprocess en Linux. En macOS no se
+    aplica (RLIMIT_AS es poco confiable ahí); se confía en el timeout."""
+
+    run_python_max_output_chars: int = 16000
+    """Tope de caracteres de stdout/stderr devueltos (trunca con aviso)."""
+
+    # --- Persistencia de historial ---
+    history_persist: bool = False
+    """Si True, el historial de la conversación se guarda tras cada turno y
+    se restaura al arrancar `wso`, dando continuidad entre sesiones. Default
+    off (igual que el logging): no toca disco si no lo pedís. El comando
+    `/reset` en el REPL borra el historial guardado."""
+
+    history_max_messages: int = 200
+    """Tope de mensajes guardados/restaurados. Acota el archivo y evita que
+    el contexto crezca sin límite entre sesiones (se conservan los últimos N)."""
 
     # --- Logging estructurado ---
     log_enabled: bool = False

@@ -110,17 +110,26 @@ def load_builtin_tools() -> ToolRegistry:
     `pip install -e ".[office]"`).
 
     Returns:
-        Registry poblado con las 16 tools built-in:
+        Registry poblado con las 26 tools built-in:
             - filesystem (4): read_file, write_file, delete_file, list_directory
             - flow (2):       responder_al_usuario, preguntar_al_usuario
+            - code (1):       run_python
             - pptx (4):       generate_pptx, read_pptx, edit_pptx_slide,
                               generate_pptx_from_template
             - xlsx (4):       generate_xlsx, read_xlsx, edit_xlsx_cell,
                               append_xlsx_rows
             - pdf (1):        read_pdf
             - docx (1):       read_docx
+            - browser (9):    browser_open_tab, browser_navigate,
+                              browser_close_tab, browser_read_page,
+                              browser_screenshot, browser_click,
+                              browser_type, browser_wait_for, browser_scroll
+
+    Las tools de `browser` se registran igual que las de Office: sin importar
+    Playwright. Solo fallan al invocarse si falta la extra `[browser]` o si
+    Chrome no está corriendo con CDP (mensaje guía en ambos casos).
     """
-    from wso.tools import docx, filesystem, flow, pdf, pptx, xlsx
+    from wso.tools import browser, code, docx, filesystem, flow, pdf, pptx, xlsx
 
     registry = ToolRegistry()
     registry.register_module(filesystem)
@@ -129,4 +138,6 @@ def load_builtin_tools() -> ToolRegistry:
     registry.register_module(xlsx)
     registry.register_module(pdf)
     registry.register_module(docx)
+    registry.register_module(browser)
+    registry.register_module(code)
     return registry

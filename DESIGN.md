@@ -319,7 +319,7 @@ wso/
 ├── main.py                       # entry point CLI; wiring final
 ├── config.py                     # Pydantic Settings; lee .env
 ├── agent/
-│   ├── loop.py                   # AgentLoop (orquestador)
+│   ├── loop.py                   # AgentLoop (orquestador; input vía prompt_toolkit)
 │   ├── parser.py                 # StreamingXMLParser
 │   ├── prompts.py                # build_system_prompt, load_context_files
 │   ├── budget.py                 # BudgetTracker, ask_continuation
@@ -341,7 +341,8 @@ wso/
 │   ├── xlsx_schemas.py           # Pydantic models de sheets/workbook
 │   ├── pdf.py                    # read_pdf (texto por página, start_page/max_chars)
 │   ├── docx.py                   # read_docx (párrafos, headings, tablas, max_chars)
-│   └── code.py                   # run_python (stub — implementación en v0.3)
+│   ├── browser.py                # browser_* (CDP attach a Chrome real, v0.3)
+│   └── code.py                   # run_python (sandbox subprocess, v0.3)
 ├── permissions/
 │   ├── manager.py                # PermissionManager + AlwaysAllowRule
 │   └── prompts.py                # ask_approval, parse_approval_input
@@ -618,6 +619,10 @@ flushea con un `ParseError` si quedó algo abierto.
 - Self-closing tags: `<tool name="ping" />`.
 - Char-by-char streaming: cada caracter por separado.
 - Múltiples bloques `<thinking>` antes de un `<tool>`.
+- Último arg abierto sin cerrar: el modelo emite `<slides_json>[...]` y
+  salta directo a `</tool>` olvidando `</slides_json>`. El parser captura
+  igual ese arg hasta el final del body (recovery observado con modelos
+  locales chicos en decks largos; evita loops de "Field required").
 - Determinismo: mismo input genera mismos eventos sin importar la
   fragmentación (test parametrizado).
 
@@ -777,29 +782,51 @@ del estudio) no expone feed. La alternativa correcta es el browser bridge
 (v0.3) — usar el Chrome real del usuario, ya logueado, sin pasar
 credenciales.
 
-### v0.3 (futuro)
+### v0.3 (en progreso)
 
-- [ ] **Browser bridge mínimo** — el agente maneja el Chrome real del
+- [x] **Browser bridge mínimo** — el agente maneja el Chrome real del
       usuario (vía Playwright + CDP attach) reutilizando sus sesiones
       logueadas. Reemplaza el approach LinkedIn-RSS (no viable). Sirve
       como puente general para cualquier app web sin API: LinkedIn,
       Sales Navigator, Notion, Airtable, dashboards internos, etc.
-      Tools mínimas: `browser_open_tab`, `browser_navigate`,
+      9 tools implementadas: `browser_open_tab`, `browser_navigate`,
       `browser_read_page`, `browser_click`, `browser_type`,
-      `browser_screenshot`, `browser_wait_for`, `browser_close_tab`.
-      Categoría de permiso nueva: `BROWSER`. Ver Apéndice A más abajo
-      para el plan técnico completo.
-- [ ] `run_python` con sandbox real (subprocess aislado + cwd limitado a
-      `workspace/` + timeout + EXECUTE permission gateado). Es el escape
-      hatch del patrón híbrido (decisión 3.1) para tareas raras que no
-      merecen una tool tipada propia. Diferido a v0.3 porque hacerlo bien
-      requiere decisiones de diseño propias del sandbox (subprocess vs
-      RestrictedPython vs WASM) que no queremos rushear.
-- [ ] Persistencia de historial entre sesiones
-- [ ] Memoria de largo plazo (RAG sobre `/context`)
-- [ ] Modo no-conversacional para batch jobs
-- [ ] Tools async (HTTP, base de datos)
-- [ ] Editar args antes de aprobar (en lugar de solo y/n)
+      `browser_screenshot`, `browser_wait_for`, `browser_close_tab`,
+      `browser_scroll` (`wso/tools/browser.py`). Categoría de permiso `BROWSER` con sticky
+      por dominio a nivel de sesión (`permissions/manager.py`). Las
+      operaciones corren en un worker thread dedicado para no chocar con
+      el event loop (ver A.6). Spike previo validó el attach contra Sales
+      Navigator real. Falta: E2E manual y endurecimiento. Ver Apéndice A.
+- [x] `run_python` con sandbox real (`wso/tools/code.py`). Escape hatch del
+      patrón híbrido (decisión 3.1) para tareas raras que no merecen una tool
+      tipada propia. Decisiones cerradas: **subprocess aislado**
+      (`sys.executable -I`) con cwd en `workspace/run`, timeout de pared,
+      resource limits (RLIMIT_CPU/FSIZE en Unix, RLIMIT_AS solo Linux), red
+      deshabilitada best-effort (subclase de socket que bloquea en `connect`,
+      sin romper imports de `ssl`/`http`/`urllib`), y gate de permiso EXECUTE
+      (sin auto-aprobación) como control real. Se descartaron RestrictedPython
+      (frágil) y WASM (sobredimensionado, sin acceso al FS del usuario).
+      Política de imports: stdlib completa, sin red.
+- [x] Persistencia de historial entre sesiones (`wso/history_store.py`).
+      Opt-in vía `WSO_HISTORY_PERSIST`. Guarda el historial (user/assistant,
+      sin system prompt) tras cada turno y lo restaura al arrancar. Escritura
+      atómica (tmp+replace), cap de mensajes, no-op por default. Comando
+      `/reset` en el REPL para empezar de cero.
+
+### v0.4 (futuro)
+
+- [ ] **E2E manual del browser + endurecimiento** — correr `wso` real contra
+      LinkedIn/Sales Navigator (leer/resumir posts), más stealth, delays
+      randomizados y detección de session expiry / pantallas de login a nivel
+      del loop. Cierra lo pendiente del browser bridge (Apéndice A.10).
+- [ ] Memoria de largo plazo (RAG sobre `/context`) — embeddings + store +
+      retrieval, para no cargar todo el contexto siempre.
+- [ ] Modo no-conversacional para batch jobs (`wso --task "..."`), habilita
+      scheduling y automatizaciones.
+- [ ] Tools async (HTTP, base de datos) — y resolver el contrato async que ya
+      asomó con el worker thread del browser (A.6).
+- [ ] Editar args antes de aprobar (en lugar de solo y/n) en el prompt de
+      permiso.
 
 ---
 
@@ -895,6 +922,7 @@ default con flag.
 | `browser_click`        | BROWSER   | selector (CSS o texto)        | Click humano (con scroll-into-view).    |
 | `browser_type`         | BROWSER   | selector, text                | Type human-like en input.               |
 | `browser_wait_for`     | READ      | selector, timeout_ms          | Espera elemento (SPA-friendly).         |
+| `browser_scroll`       | READ      | direction, amount             | Scroll para revelar contenido lazy.     |
 
 Notas:
 
@@ -983,3 +1011,37 @@ de codear:
    Chrome real con tu Sales Navigator logueado. Si LinkedIn detecta el
    automation y te limita, el plan completo cambia.
 3. Recién entonces, abrir el iter de browser bridge.
+
+### A.10 Resultado del spike y decisiones tomadas (2026-06)
+
+El spike (`scripts/spike_cdp_attach.py` + `scripts/launch-chrome-cdp.sh`)
+se corrió contra Chrome real y **validó la base**:
+
+- `connect_over_cdp` se attachea al Chrome del usuario y ve sus tabs
+  reales (no un navegador limpio).
+- Tras loguearse, `browser_read_page` (vía `innerText`) devuelve el
+  contenido real de Sales Navigator (`Home / Accounts / Leads / ...`),
+  no una pantalla de login.
+- `navigator.webdriver` da **`false`**: LinkedIn no detectó automation
+  con el flag `--disable-blink-features=AutomationControlled`.
+
+Decisiones cerradas a partir del spike:
+
+- **Perfil**: aislado (`~/.wso-chrome`) como default; el usuario se
+  loguea una vez y persiste. `--default` queda como opt-in documentado.
+- **Sync vs async (A.6)**: resuelto con **worker thread dedicado**. El
+  loop ejecuta las tools síncronamente dentro del thread del event loop,
+  donde Playwright `sync_api` se niega a operar. Un thread propio que es
+  dueño de la conexión y los objetos (page/context, no thread-safe)
+  resuelve ambos problemas sin volver async el contrato de tools.
+- **Espera de SPA**: las lecturas/acciones esperan render real; existe
+  `browser_wait_for` para el modelo y `browser_read_page` avisa cuando el
+  body está vacío (probable login wall / SPA sin renderizar).
+- **Permisos**: `BROWSER` nunca auto-aprueba por default. Sticky de
+  sesión **por dominio** para navegación (open_tab/navigate comparten
+  grupo); las acciones sin URL (click/type) caen al sticky por args
+  exactos. Nada persiste entre sesiones.
+
+Pendiente para el siguiente iter: E2E manual leyendo posts reales,
+endurecimiento (stealth/delays, detección de session expiry y pantallas
+de login a nivel del loop).
