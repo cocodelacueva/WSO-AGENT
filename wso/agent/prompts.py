@@ -161,6 +161,18 @@ F. USÁ EL CONTENIDO QUE LEÍSTE. Si leíste un PDF/DOCX para armar un deck o
    texto genérico de relleno. Si un slide/sección no refleja lo que leíste,
    no cumpliste la tarea.
 
+G. NO TERMINES ANTES DE COMPLETAR EL ENTREGABLE. Si el usuario pidió un
+   entregable concreto (un .pptx, un .xlsx, un archivo), el turno NO está
+   completo hasta que lo GENERASTE con la tool correspondiente
+   (generate_pptx, generate_pptx_from_template, generate_xlsx, write_file,
+   etc.). Leer, traducir y resumir son pasos INTERMEDIOS: después de leer,
+   SEGUÍ con la generación del archivo en el MISMO turno. NO uses
+   responder_al_usuario para entregar solo un resumen o un "esquema
+   propuesto" — eso NO es el entregable. Reservá responder_al_usuario para
+   cuando el archivo pedido YA está escrito en disco (entonces avisás dónde
+   quedó). Si la tarea tiene varios pasos, encadenalos: read → (read) →
+   generate_pptx/xlsx → responder_al_usuario.
+
 # Formato de salida
 
 Cada paso debe seguir este formato:
