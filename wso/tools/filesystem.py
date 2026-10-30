@@ -14,6 +14,7 @@ Convenciones:
 
 from __future__ import annotations
 
+import difflib
 from pathlib import Path
 
 from wso.tools.base import PermissionCategory, tool
@@ -147,8 +148,7 @@ def apply_edit(text: str, old_string: str, new_string: str, replace_all: bool) -
             return text.replace(stripped, new_string.strip(), 1)
         raise ValueError(
             "old_string no aparece en el archivo. Tiene que coincidir EXACTO "
-            "(incluida la indentación). Releé el archivo con read_file y copiá "
-            "el fragmento tal cual."
+            "(incluida la indentación)." + _closest_hint(text, old_string)
         )
     if count > 1 and not replace_all:
         raise ValueError(
@@ -157,6 +157,41 @@ def apply_edit(text: str, old_string: str, new_string: str, replace_all: bool) -
         )
     return text.replace(old_string, new_string) if replace_all else text.replace(
         old_string, new_string, 1
+    )
+
+
+def check_edit(path: str, old_string: str, new_string: str, replace_all: bool = False) -> None:
+    """Validar una edición sin escribir (el loop la usa antes de pedir permiso)."""
+    apply_edit(_read_text(resolve_path(path)), old_string, new_string, replace_all)
+
+
+def _closest_hint(text: str, old_string: str, max_lines: int = 12) -> str:
+    """Sugerir el fragmento del archivo más parecido a `old_string`.
+
+    Los modelos chicos suelen "recordar" mal el código (agregan un `const`,
+    cambian comillas o indentación). Mostrarles el texto real para copiar
+    funciona mucho mejor que pedirles que relean el archivo entero.
+    """
+    lines = text.splitlines()
+    n = min(max(len(old_string.strip().splitlines()), 1), max_lines)
+    target = old_string.strip()
+    best_ratio, best_i = 0.0, -1
+    for i in range(max(len(lines) - n + 1, 1)):
+        window = "\n".join(lines[i : i + n]).strip()
+        if not window:
+            continue
+        sm = difflib.SequenceMatcher(None, target, window, autojunk=False)
+        if sm.real_quick_ratio() <= best_ratio or sm.quick_ratio() <= best_ratio:
+            continue
+        ratio = sm.ratio()
+        if ratio > best_ratio:
+            best_ratio, best_i = ratio, i
+    if best_i < 0 or best_ratio < 0.5:
+        return " Releé el archivo con read_file y copiá el fragmento tal cual."
+    fragment = "\n".join(lines[best_i : best_i + n])
+    return (
+        f" Lo más parecido está en las líneas {best_i + 1}-{best_i + n}; "
+        f"si es eso, usalo tal cual como old_string:\n{fragment}"
     )
 
 

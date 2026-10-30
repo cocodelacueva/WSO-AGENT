@@ -53,3 +53,27 @@ class TestFit:
         cm = ContextManager.for_window(16384)
         assert cm.reserve_output == 4096
         assert cm.budget == 16384 - 4096
+
+
+class TestCalibration:
+    def test_observe_moves_ratio_toward_measured(self) -> None:
+        cm = ContextManager(window=16000, reserve_output=0)
+        cm.observe(chars_sent=40_000, actual_tokens=10_000)  # 4 chars/token
+        assert cm.chars_per_token == 3.5
+        cm.observe(chars_sent=40_000, actual_tokens=10_000)
+        assert cm.chars_per_token == 3.75
+
+    def test_implausible_measurements_ignored(self) -> None:
+        cm = ContextManager(window=16000, reserve_output=0)
+        cm.observe(chars_sent=40_000, actual_tokens=100)  # solo tokens nuevos (cache)
+        cm.observe(chars_sent=40_000, actual_tokens=0)
+        assert cm.chars_per_token == 3.0
+
+    def test_calibration_avoids_premature_trimming(self) -> None:
+        # El caso de la sesión real: con 3 chars/token se recortaba de más.
+        history = [m for i in range(3) for m in turn(i, result_chars=11_000)]
+        cm = ContextManager(window=16384, reserve_output=4096)
+        assert cm.fit("sys", [], list(history)).changed
+        cm.observe(cm.count_chars("sys", [], history), int(cm.count_chars("sys", [], history) / 4))
+        cm2 = ContextManager(window=16384, reserve_output=4096, chars_per_token=cm.chars_per_token)
+        assert not cm2.fit("sys", [], list(history)).changed

@@ -44,6 +44,7 @@ from wso.permissions.prompts import ApprovalChoice, ask_approval
 from wso.session_log import SessionLogger
 from wso.tools import shell
 from wso.tools.base import ToolDefinition
+from wso.tools.filesystem import check_edit
 from wso.tools.registry import ToolRegistry
 from wso.ui.console import ConsoleRenderer
 
@@ -53,9 +54,12 @@ _MAX_CONSECUTIVE_MODEL_ERRORS = 3
 _DENIED = "El usuario rechazó esta acción. No sigas: esperá nuevas instrucciones."
 _CANCELLED = "No se ejecutó: el turno se cortó antes."
 _EMPTY_NUDGE = (
-    "Tu respuesta llegó vacía. Seguí con la tarea usando las tools, o respondé "
-    "en texto si ya terminaste."
+    "Tu respuesta llegó vacía (sin texto ni tool call). Seguí con la tarea: "
+    "llamá la tool que necesitás, o respondé en texto si ya terminaste."
 )
+# Respuestas vacías toleradas por turno antes de rendirse. Modelos con
+# razonamiento (gpt-oss, qwen3) a veces "solo piensan" y no emiten nada.
+_MAX_NUDGES = 2
 
 
 @dataclass
@@ -79,6 +83,7 @@ class AgentLoop:
 
     _turn_count: int = field(default=0, init=False, repr=False)
     _consecutive_model_errors: int = field(default=0, init=False, repr=False)
+    _last_thinking: str = field(default="", init=False, repr=False)
     _prompt_session: object | None = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -142,15 +147,15 @@ class AgentLoop:
         self.history.append(Message(role="user", content=user_input))
         self.session_log.log("turn_start", turn=self._turn_count, input=user_input)
         self._consecutive_model_errors = 0
-        nudged = False
+        nudges = 0
 
         try:
             while True:
                 if self.budget.is_exhausted() and not self._ask_continue():
                     return
-                outcome = await self._step(allow_nudge=not nudged)
+                outcome = await self._step(allow_nudge=nudges < _MAX_NUDGES)
                 if outcome == "nudged":
-                    nudged = True
+                    nudges += 1
                 elif outcome == "done":
                     return
         except (KeyboardInterrupt, asyncio.CancelledError):
@@ -192,6 +197,7 @@ class AgentLoop:
         self.session_log.log(
             "model_response",
             text=message.content,
+            thinking=self._last_thinking[:4000],
             tool_calls=[{"name": c.name, "args": c.args} for c in message.tool_calls],
             input_tokens=response.usage.input_tokens,
             output_tokens=response.usage.output_tokens,
@@ -204,7 +210,10 @@ class AgentLoop:
             if allow_nudge:
                 self.history.append(Message(role="user", content=_EMPTY_NUDGE))
                 return "nudged"
-            self.renderer.render_error("El modelo devolvió una respuesta vacía.")
+            self.renderer.render_error(
+                "El modelo devolvió respuestas vacías y se cortó el turno. "
+                "Probá pedirlo de nuevo, más concreto (qué archivo, qué cambio)."
+            )
             return "done"
 
         if response.truncated:
@@ -231,6 +240,8 @@ class AgentLoop:
     async def _call_model(self) -> ResponseDone | None:
         """Llamar al modelo en streaming. None si falló."""
         messages = [Message(role="system", content=self.system_prompt), *self.history]
+        chars_sent = self.context.count_chars(self.system_prompt, self._specs, self.history)
+        thinking: list[str] = []
         final: ResponseDone | None = None
         try:
             with self.renderer.status("pensando…") as _:
@@ -241,6 +252,7 @@ class AgentLoop:
                 if isinstance(event, TextDelta):
                     self.renderer.render_text_chunk(event.text)
                 elif isinstance(event, ThinkingDelta):
+                    thinking.append(event.text)
                     self.renderer.render_thinking_chunk(event.text)
                 elif isinstance(event, ResponseDone):
                     final = event
@@ -259,6 +271,8 @@ class AgentLoop:
             self._on_model_error("El stream terminó sin respuesta final.", retryable=True)
             return None
         self._consecutive_model_errors = 0
+        self._last_thinking = "".join(thinking)
+        self.context.observe(chars_sent, final.usage.input_tokens)
         return final
 
     def _on_model_error(self, message: str, *, retryable: bool) -> None:
@@ -288,6 +302,18 @@ class AgentLoop:
                 is_error=True,
             )
             self.budget.record(StepRecord(call.name, "", success=False, error="unknown tool"))
+            return True
+
+        if (problem := _precheck(call)) is not None:
+            # No tiene sentido pedirle al usuario que apruebe algo que va a fallar.
+            text = f"ERROR: {problem}"
+            self.renderer.render_tool_call(call.name, call.args)
+            self.renderer.render_observation(text, is_error=True)
+            self._append_result(call, text, is_error=True)
+            self.session_log.log(
+                "observation", id=call.id, tool=call.name, success=False, result=text
+            )
+            self.budget.record(StepRecord(call.name, "", success=False, error=problem))
             return True
 
         approval = self._check_permission(tool_def, call.args)
@@ -465,3 +491,20 @@ def _format_args_summary(args: dict[str, Any], max_value_length: int = 30) -> st
 
 def _k(tokens: int) -> str:
     return f"{tokens / 1000:.1f}k" if tokens >= 1000 else str(tokens)
+
+
+def _precheck(call: ToolCall) -> str | None:
+    """Errores detectables antes de pedir permiso (hoy: edit_file que no aplica)."""
+    if call.name != "edit_file":
+        return None
+    a = call.args
+    path = a.get("path") or a.get("file_path") or a.get("filename")
+    old = a.get("old_string", a.get("old"))
+    new = a.get("new_string", a.get("new"))
+    if not isinstance(path, str) or not isinstance(old, str) or not isinstance(new, str):
+        return None  # args inválidos: los reporta la validación normal
+    try:
+        check_edit(path, old, new, bool(a.get("replace_all", False)))
+    except (OSError, ValueError) as e:
+        return f"{type(e).__name__}: {e}"
+    return None

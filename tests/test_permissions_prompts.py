@@ -128,6 +128,19 @@ class TestAskApproval:
         assert "crear" in output
         assert "+y" in output
 
+    def test_question_is_printed_right_above_input(
+        self, sample_tool: ToolDefinition, quiet_console: Console
+    ) -> None:
+        ask_approval(
+            sample_tool,
+            {"path": "/x", "content": "y"},
+            console=quiet_console,
+            input_func=lambda prompt: "n",
+        )
+        output = quiet_console.file.getvalue()  # type: ignore[union-attr]
+        last_line = output.rstrip("\n").splitlines()[-1]
+        assert "¿Escribo este archivo?" in last_line
+
     def test_feedback_response_propagates(
         self, sample_tool: ToolDefinition, quiet_console: Console
     ) -> None:

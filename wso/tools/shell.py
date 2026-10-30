@@ -90,9 +90,15 @@ def bash(command: str, timeout_s: int = 0) -> str:
         _RUNNING.discard(proc)
 
     elapsed = time.monotonic() - start
-    header = f"[exit {proc.returncode}, {elapsed:.1f}s]"
-    body = output.rstrip("\n") if output and output.strip() else "(sin salida)"
-    return header + "\n" + clip_output(body, settings.bash_max_output_chars)
+    # La salida va primero y sin encabezado: con un "[exit 0]" arriba, modelos
+    # chicos (gpt-oss) leían el encabezado como todo el resultado.
+    body = clip_output(output.rstrip("\n"), settings.bash_max_output_chars) if (
+        output and output.strip()
+    ) else ""
+    if proc.returncode == 0:
+        return body or "(el comando terminó bien, sin salida)"
+    status = f"[el comando falló: exit code {proc.returncode}, {elapsed:.1f}s]"
+    return f"{body}\n{status}" if body else status
 
 
 def _kill(proc: subprocess.Popen[str], posix: bool) -> None:

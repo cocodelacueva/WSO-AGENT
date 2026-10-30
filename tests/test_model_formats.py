@@ -99,3 +99,15 @@ class TestMessageSerialization:
     def test_roundtrip(self) -> None:
         for m in CONVERSATION:
             assert Message.from_dict(m.to_dict()) == m
+
+
+class TestThinkingRoundtrip:
+    def test_ollama_resends_thinking(self) -> None:
+        m = Message(role="assistant", tool_calls=(CALL,), raw={"thinking": "plan"})
+        assert to_ollama_messages([m])[0]["thinking"] == "plan"
+
+    def test_anthropic_ignores_foreign_raw(self) -> None:
+        history = [Message(role="user", content="u"),
+                   Message(role="assistant", content="hola", raw={"thinking": "plan"})]
+        _, msgs = to_anthropic_messages(history)
+        assert msgs[1]["content"] == [{"type": "text", "text": "hola"}]

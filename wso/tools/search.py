@@ -57,14 +57,20 @@ def glob(pattern: str, path: str = ".") -> str:
     root = resolve_path(path)
     if not root.is_dir():
         raise NotADirectoryError(f"{display_path(root)} no es una carpeta.")
-    pattern = pattern.strip().lstrip("./") or "*"
+    pattern = pattern.strip().removeprefix("./") or "*"
     if "/" not in pattern:
         pattern = "**/" + pattern
+    if pattern.endswith("**"):
+        pattern += "/*"  # `dir/**` solo matchea carpetas en pathlib
 
-    matches = [
-        p for p in root.glob(pattern)
-        if p.is_file() and not _is_ignored(p, root)
-    ]
+    found = [p for p in root.glob(pattern) if not _is_ignored(p, root)]
+    matches = [p for p in found if p.is_file()]
+    if not matches:
+        # El patrón nombra una carpeta (ej: "arbolito"): listar su contenido.
+        matches = [
+            f for d in found if d.is_dir()
+            for f in d.rglob("*") if f.is_file() and not _is_ignored(f, root)
+        ]
     if not matches:
         return f"Sin resultados para {pattern!r} en {display_path(root)}."
     matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
@@ -106,6 +112,11 @@ def grep(pattern: str, path: str = ".", include: str = "", ignore_case: bool = F
         else _grep_python(pattern, root, include, ignore_case)
     )
     if not lines:
+        if include:
+            return (
+                f"Sin coincidencias para {pattern!r} en archivos {include!r}. "
+                "Probá sin el filtro include (o con la extensión correcta)."
+            )
         return f"Sin coincidencias para {pattern!r}."
     total = len(lines)
     lines = lines[:MAX_GREP_LINES]

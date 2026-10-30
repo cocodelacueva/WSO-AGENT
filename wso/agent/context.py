@@ -17,8 +17,9 @@ Solo actúa cuando el historial se acerca al límite. Con modelos cloud de
 ventana grande prácticamente nunca dispara, así el historial queda
 append-only (lo que el prompt caching y el thinking de Claude necesitan).
 
-La cuenta de tokens es una estimación por caracteres (conservadora para
-código). No usamos el tokenizer real para no depender del provider.
+La cuenta de tokens es una estimación por caracteres. Arranca conservadora
+(3 caracteres/token) y se calibra con los tokens reales que reporta el
+provider en cada respuesta (`observe`), así no recorta de más.
 """
 
 from __future__ import annotations
@@ -29,11 +30,14 @@ from dataclasses import dataclass, replace
 from wso.agent.model.base import Message, ToolSpec
 
 # Código y JSON tokenizan peor que prosa: ~3 caracteres por token es
-# conservador para la mayoría de los tokenizers (Qwen, Llama, Claude).
+# conservador para la mayoría de los tokenizers. Es el valor inicial; después
+# se calibra con el uso real.
 CHARS_PER_TOKEN = 3.0
+_MIN_CHARS_PER_TOKEN = 2.5
+_MAX_CHARS_PER_TOKEN = 5.0
 
 # Por debajo de esta fracción de la ventana útil no tocamos nada.
-_TRIGGER = 0.75
+_TRIGGER = 0.85
 
 _ELIDE_MIN_CHARS = 300
 
@@ -60,6 +64,8 @@ class ContextManager:
     """Tokens reservados para la respuesta del modelo."""
     keep_recent: int = 4
     """Resultados de tools recientes que nunca se resumen en el paso 1."""
+    chars_per_token: float = CHARS_PER_TOKEN
+    """Se ajusta con `observe` según los tokens reales del provider."""
 
     @classmethod
     def for_window(cls, window: int) -> ContextManager:
@@ -71,12 +77,28 @@ class ContextManager:
         """Tokens disponibles para el prompt (system + tools + historial)."""
         return self.window - self.reserve_output
 
-    def estimate(self, system: str, tools: list[ToolSpec], history: list[Message]) -> int:
+    def count_chars(self, system: str, tools: list[ToolSpec], history: list[Message]) -> int:
         chars = len(system) + sum(
             len(t.name) + len(t.description) + len(json.dumps(t.parameters)) for t in tools
         )
-        chars += sum(_message_chars(m) for m in history)
-        return int(chars / CHARS_PER_TOKEN)
+        return chars + sum(_message_chars(m) for m in history)
+
+    def estimate(self, system: str, tools: list[ToolSpec], history: list[Message]) -> int:
+        return int(self.count_chars(system, tools, history) / self.chars_per_token)
+
+    def observe(self, chars_sent: int, actual_tokens: int) -> None:
+        """Calibrar la estimación con los tokens de entrada que reportó el provider.
+
+        Se ignoran mediciones implausibles (ej: Ollama a veces cuenta solo los
+        tokens que no estaban en su cache) y el ratio se suaviza.
+        """
+        if actual_tokens <= 0 or chars_sent <= 0:
+            return
+        measured = chars_sent / actual_tokens
+        if not _MIN_CHARS_PER_TOKEN <= measured <= _MAX_CHARS_PER_TOKEN * 1.5:
+            return
+        measured = min(measured, _MAX_CHARS_PER_TOKEN)
+        self.chars_per_token = (self.chars_per_token + measured) / 2
 
     def fit(self, system: str, tools: list[ToolSpec], history: list[Message]) -> FitReport:
         """Ajustar `history` IN PLACE para que entre en la ventana."""

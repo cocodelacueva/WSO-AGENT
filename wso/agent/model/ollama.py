@@ -82,6 +82,7 @@ class OllamaClient(ModelClient):
             ) from e
 
         text_parts: list[str] = []
+        thinking_parts: list[str] = []
         calls: list[ToolCall] = []
         usage = Usage()
         truncated = False
@@ -89,6 +90,7 @@ class OllamaClient(ModelClient):
             async for chunk in stream:
                 msg = chunk.message
                 if msg.thinking:
+                    thinking_parts.append(msg.thinking)
                     yield ThinkingDelta(msg.thinking)
                 if msg.content:
                     text_parts.append(msg.content)
@@ -112,7 +114,12 @@ class OllamaClient(ModelClient):
 
         yield ResponseDone(
             message=Message(
-                role="assistant", content="".join(text_parts), tool_calls=tuple(calls)
+                role="assistant",
+                content="".join(text_parts),
+                tool_calls=tuple(calls),
+                # El razonamiento vuelve al modelo en el paso siguiente: sin él,
+                # modelos como gpt-oss re-planifican de cero en cada tool call.
+                raw={"thinking": "".join(thinking_parts)} if thinking_parts else None,
             ),
             usage=usage,
             truncated=truncated,
@@ -140,17 +147,15 @@ def to_ollama_messages(messages: list[Message]) -> list[dict[str, Any]]:
     for m in messages:
         if m.role == "tool":
             out.append({"role": "tool", "content": m.content, "tool_name": m.name or ""})
-        elif m.role == "assistant" and m.tool_calls:
-            out.append(
-                {
-                    "role": "assistant",
-                    "content": m.content,
-                    "tool_calls": [
-                        {"function": {"name": c.name, "arguments": c.args}}
-                        for c in m.tool_calls
-                    ],
-                }
-            )
+        elif m.role == "assistant":
+            msg: dict[str, Any] = {"role": "assistant", "content": m.content}
+            if m.tool_calls:
+                msg["tool_calls"] = [
+                    {"function": {"name": c.name, "arguments": c.args}} for c in m.tool_calls
+                ]
+            if isinstance(m.raw, dict) and m.raw.get("thinking"):
+                msg["thinking"] = m.raw["thinking"]
+            out.append(msg)
         else:
             out.append({"role": m.role, "content": m.content})
     return out

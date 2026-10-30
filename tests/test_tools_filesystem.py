@@ -107,6 +107,18 @@ class TestApplyEdit:
         with pytest.raises(ValueError, match="no aparece"):
             apply_edit("a = 1", "zzz", "y", False)
 
+    def test_not_found_suggests_closest_fragment(self) -> None:
+        # Caso real (gpt-oss): "recordó" la línea con un `const` de más.
+        text = "a = 1\n  const deer1 = reindeer(1.75), deer2 = reindeer(2.75);\nb = 2\n"
+        with pytest.raises(ValueError) as e:
+            apply_edit(text, "const deer2 = reindeer(2.75);", "x", False)
+        assert "línea" in str(e.value)
+        assert "  const deer1 = reindeer(1.75), deer2 = reindeer(2.75);" in str(e.value)
+
+    def test_not_found_without_similar_fragment(self) -> None:
+        with pytest.raises(ValueError, match="read_file"):
+            apply_edit("a = 1\nb = 2\n", "class Something(Base):", "x", False)
+
     def test_ambiguous_requires_replace_all(self) -> None:
         with pytest.raises(ValueError, match="2 veces"):
             apply_edit("x\nx\n", "x", "y", False)

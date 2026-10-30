@@ -182,7 +182,7 @@ def to_anthropic_messages(messages: list[Message]) -> tuple[str, list[dict[str, 
 
         if m.role == "assistant":
             content: list[dict[str, Any]]
-            if m.raw is not None:
+            if isinstance(m.raw, list):  # contenido nativo de Claude (otro provider: dict)
                 content = list(m.raw)
             else:
                 content = []

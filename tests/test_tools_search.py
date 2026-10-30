@@ -70,3 +70,28 @@ class TestGrep:
         (project / "many.txt").write_text("hit\n" * 300, encoding="utf-8")
         out = grep("hit")
         assert "coincidencias más" in out
+
+
+class TestGlobModelPatterns:
+    """Patrones que usan los modelos chicos (sacados de logs reales)."""
+
+    def test_dir_double_star(self, project: Path) -> None:
+        (project / "arbolito").mkdir()
+        (project / "arbolito" / "index.html").write_text("x")
+        assert "arbolito/index.html" in glob("arbolito/**")
+
+    def test_folder_name_lists_its_files(self, project: Path) -> None:
+        (project / "arbolito").mkdir()
+        (project / "arbolito" / "index.html").write_text("x")
+        assert "arbolito/index.html" in glob("arbolito")
+
+    def test_dotfile_pattern_keeps_dot(self, project: Path) -> None:
+        (project / ".env").write_text("x")
+        assert ".env" in glob(".env")
+
+
+def test_grep_no_match_mentions_include_filter(project: Path) -> None:
+    (project / "index.html").write_text("const deerLegs = [];\n")
+    out = grep("deerLegs", include="*.js")
+    assert "include" in out
+    assert "deerLegs" in grep("deerLegs")

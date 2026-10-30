@@ -244,6 +244,7 @@ _READONLY_COMMANDS = frozenset(
     {
         "ls", "pwd", "cat", "head", "tail", "wc", "file", "which", "tree",
         "stat", "du", "df", "date", "whoami", "uname", "rg", "grep", "diff",
+        "echo",
     }
 )
 _READONLY_GIT = frozenset({"status", "diff", "log", "show", "blame", "rev-parse"})

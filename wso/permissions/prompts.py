@@ -200,7 +200,20 @@ def ask_approval(
     if input_func is None:
         input_func = input
     render_approval_panel(tool, args, console, session_hint)
+    # La pregunta va pegada al cursor: con un diff largo el título del panel
+    # queda fuera de pantalla y el "> " solo parece el prompt del chat.
+    console.print(
+        Text(f"¿{_QUESTIONS.get(tool.name, 'Permitir esta acción')}? ", style="bold yellow")
+        + Text("y = sí · s = sí a todo en la sesión · n = no", style="yellow")
+    )
     return parse_approval_input(input_func("> "))
+
+
+_QUESTIONS = {
+    "edit_file": "Aplico esta edición",
+    "write_file": "Escribo este archivo",
+    "bash": "Ejecuto este comando",
+}
 
 
 def _truncate(value: str, max_length: int = 80) -> str:

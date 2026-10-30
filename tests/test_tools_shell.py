@@ -20,17 +20,16 @@ def _in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 class TestBash:
     def test_runs_in_project_dir(self, tmp_path: Path) -> None:
-        out = bash("pwd")
-        assert out.startswith("[exit 0,")
-        assert str(tmp_path.resolve()) in out
+        assert bash("pwd") == str(tmp_path.resolve())
 
     def test_reports_exit_code_and_stderr(self) -> None:
         out = bash("echo oops >&2; exit 3")
-        assert out.startswith("[exit 3,")
-        assert "oops" in out
+        assert out.startswith("oops")
+        assert "exit code 3" in out
 
     def test_no_output(self) -> None:
-        assert "(sin salida)" in bash("true")
+        assert "sin salida" in bash("true")
+        assert "exit code 1" in bash("false")
 
     def test_empty_command_rejected(self) -> None:
         with pytest.raises(ValueError):
@@ -38,7 +37,7 @@ class TestBash:
 
     def test_stdin_closed(self) -> None:
         # Un comando que espera input no cuelga: recibe EOF.
-        assert bash("cat").startswith("[exit 0,")
+        assert "terminó bien" in bash("cat")
 
     def test_timeout_kills_process(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(shell.settings, "bash_timeout", 1)

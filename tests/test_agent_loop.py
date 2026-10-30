@@ -121,6 +121,19 @@ class TestPermissions:
         await loop.execute_turn("cambiá x")
         assert (project / "a.py").read_text(encoding="utf-8") == "x = 3\n"
 
+    async def test_edit_that_cannot_apply_skips_approval(self, project: Path) -> None:
+        loop, model, _ = make_loop(
+            project,
+            [call("edit_file", path="a.py", old_string="const x = 1", new_string="x = 2"),
+             say("ok")],
+            answers=[],  # si preguntara, el input guionado fallaría
+        )
+        await loop.execute_turn("cambiá x")
+        result = tool_results(loop)[0]
+        assert result.is_error
+        assert "x = 1" in result.content  # sugiere el fragmento real
+        assert len(model.calls) == 2
+
     async def test_deny_cancels_remaining_calls_of_same_response(self, project: Path) -> None:
         both = Message(
             role="assistant",
@@ -145,11 +158,18 @@ class TestModelRobustness:
         assert loop.history[1].tool_calls[0].name == "read_file"
         assert "x = 1" in tool_results(loop)[0].content
 
-    async def test_empty_response_nudged_once(self, project: Path) -> None:
-        loop, model, _ = make_loop(project, [say(""), say(""), say("nunca")])
+    async def test_empty_response_nudged_then_recovers(self, project: Path) -> None:
+        loop, model, _ = make_loop(project, [say(""), say(""), say("listo")])
         await loop.execute_turn("x")
-        assert len(model.calls) == 2
+        assert len(model.calls) == 3
         assert "vacía" in loop.history[2].content
+        assert loop.history[-1].content == "listo"
+
+    async def test_gives_up_after_max_empty_responses(self, project: Path) -> None:
+        loop, model, out = make_loop(project, [say("")] * 5)
+        await loop.execute_turn("x")
+        assert len(model.calls) == 3
+        assert "respuestas vacías" in out.getvalue()
 
     async def test_retryable_error_is_retried(self, project: Path) -> None:
         loop, model, _ = make_loop(project, [ModelError("se cayó"), say("ok")])

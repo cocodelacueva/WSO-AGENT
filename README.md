@@ -60,7 +60,26 @@ cd ~/proyectos/mi-app
 wso
 ```
 
-**Opción B: activando el venv.**
+**Opción B: enlace en el PATH (sin alias ni activar nada).** El script
+`.venv/bin/wso` ya apunta al Python del venv, así que alcanza con un
+enlace en una carpeta que esté en el PATH:
+
+```bash
+mkdir -p ~/.local/bin
+ln -s /ruta/a/wso-ai-harness/.venv/bin/wso ~/.local/bin/wso
+echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc   # una sola vez
+source ~/.zshrc
+which wso        # → ~/.local/bin/wso
+```
+
+Si movés la carpeta del harness, rehacé el enlace.
+
+> ¿Por qué no agregar `.venv/bin` directo al PATH? Funciona, pero esa
+> carpeta también tiene `python`, `pip`, `pytest`, `ruff`… del venv: pasarían
+> a ser los de toda tu terminal y taparían los de pyenv/sistema en otros
+> proyectos. El enlace expone solo `wso`.
+
+**Opción C: activando el venv.**
 
 ```bash
 source /ruta/a/wso-ai-harness/.venv/bin/activate
