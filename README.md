@@ -27,15 +27,61 @@ Ctrl+C interrumpe el turno en curso (y mata el comando que esté corriendo).
 
 Requiere Python 3.11+.
 
+### Instalación (una sola vez)
+
 ```bash
+cd /ruta/a/wso-ai-harness
 python3 -m venv .venv
 source .venv/bin/activate            # Windows: .\.venv\Scripts\Activate.ps1
-pip install -e ".[all]"
-cp .env.example .env                 # y editalo
+python -m pip install -e ".[all]"
+cp .env.example .env                 # y editalo (ver abajo)
 ```
 
-Para usarlo desde cualquier carpeta, dejá el venv activado o agregá un
-alias, por ejemplo `alias wso=~/ruta/a/wso-ai-harness/.venv/bin/wso`.
+Usá siempre `python -m pip` con el venv activado, no `pip` a secas: así
+se instala en el Python del venv y no en el global (pyenv, sistema).
+Para reinstalar cuando cambien dependencias, repetí el `python -m pip
+install -e ".[all]"` desde la carpeta del harness con el venv activado.
+
+### Arrancar
+
+WSO se abre **desde la carpeta del proyecto en el que querés trabajar**,
+no desde la del harness. La config se lee igual del `.env` del harness.
+
+**Opción A: alias (recomendado).** Agregá al final de `~/.zshrc`:
+
+```bash
+alias wso=/ruta/a/wso-ai-harness/.venv/bin/wso
+```
+
+Recargá con `source ~/.zshrc`. Desde ahí, en cualquier carpeta:
+
+```bash
+cd ~/proyectos/mi-app
+wso
+```
+
+**Opción B: activando el venv.**
+
+```bash
+source /ruta/a/wso-ai-harness/.venv/bin/activate
+cd ~/proyectos/mi-app
+wso
+```
+
+### Si `wso` falla con `ModuleNotFoundError: No module named 'wso'`
+
+La terminal está ejecutando una copia vieja de `wso` instalada en el
+Python global en vez de la del venv. Verificá con `which wso`: tiene que
+terminar en `.venv/bin/wso`. Si no:
+
+```bash
+# sacar la copia del Python global (ajustá la ruta a la que muestre `which wso`)
+/ruta/al/python/global -m pip uninstall -y wso
+hash -r          # que zsh olvide la ruta cacheada
+which wso        # ahora debería apuntar al venv
+```
+
+O usá el alias de la opción A, que apunta directo al venv.
 
 ### Modelo local (Ollama)
 
