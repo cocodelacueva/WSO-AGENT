@@ -4,11 +4,11 @@ Cada tool es:
     - una función Python con argumentos tipados
     - registrada vía @tool con nombre, descripción y categoría de permiso
     - validada con Pydantic al recibir args desde el modelo
-    - capaz de auto-generar su sección del system prompt
+    - capaz de generar su JSON Schema para el tool calling nativo
 
-Una sola fuente de verdad: el código y el prompt salen de la misma
-declaración. Si renombrás un arg de la función, el prompt se actualiza
-solo y la validación sigue funcionando.
+Una sola fuente de verdad: el código y el schema que ve el modelo salen
+de la misma declaración. Si renombrás un arg de la función, el schema se
+actualiza solo y la validación sigue funcionando.
 
 El decorador NO mantiene estado global. Solo adjunta la `ToolDefinition`
 a la función como atributo `_tool_def`. El registry construye su mapa
@@ -26,6 +26,8 @@ from typing import Any
 
 from pydantic import BaseModel, ValidationError, create_model
 
+from wso.agent.model.base import ToolSpec
+
 # ---------------------------------------------------------------------------
 # Categorías de permiso
 # ---------------------------------------------------------------------------
@@ -39,15 +41,11 @@ class PermissionCategory(str, Enum):  # noqa: UP042 — StrEnum es 3.11+; manten
     """
 
     READ = "read"
+    """Leer/buscar archivos. Auto-aprobado dentro del proyecto."""
     WRITE = "write"
-    DELETE = "delete"
-    NETWORK = "network"
+    """Crear o modificar archivos. Pide aprobación (con preview/diff)."""
     EXECUTE = "execute"
-    BROWSER = "browser"
-    """Tools que manejan el navegador real (navegar, click, type). Nunca
-    auto-aprobadas por default; sticky por dominio a nivel de sesión."""
-    FLOW = "flow"
-    """Tools de control de flujo (responder, preguntar). No piden permiso."""
+    """Correr comandos de shell. Pide aprobación salvo comandos de solo lectura."""
 
 
 # ---------------------------------------------------------------------------
@@ -86,7 +84,7 @@ class ToolDefinition:
     Una vez registrada, el agente puede:
         - encontrarla por nombre (vía registry)
         - validar args con `validate_and_call`
-        - generar su documentación con `to_prompt_section`
+        - generar su JSON Schema con `to_spec`
     """
 
     name: str
@@ -96,13 +94,13 @@ class ToolDefinition:
     """Función Python que ejecuta la tool. Recibe kwargs ya validados."""
 
     args_schema: dict[str, str] = field(default_factory=dict)
-    """Descripciones humanas de cada arg (para el system prompt)."""
+    """Descripciones humanas de cada arg (van al JSON Schema)."""
 
     aliases: dict[str, str] = field(default_factory=dict)
     """Mapeo `alias -> arg canónico`. Tolera que el modelo use otro nombre.
 
-    Ej: `{"slides": "slides_json"}` hace que una tool call con `slides`
-    se interprete como `slides_json`. Solo se aplica si el arg canónico
+    Ej: `{"file_path": "path"}` hace que una tool call con `file_path`
+    se interprete como `path`. Solo se aplica si el arg canónico
     no vino ya provisto (lo explícito gana sobre el alias).
     """
 
@@ -123,8 +121,7 @@ class ToolDefinition:
         """Validar los args contra el schema y ejecutar el handler.
 
         Args:
-            args: Diccionario crudo de args (típicamente parseado del XML
-                emitido por el modelo).
+            args: Diccionario crudo de args (la tool call del modelo).
 
         Returns:
             Lo que devuelva el handler (string en la mayoría de las tools).
@@ -139,57 +136,21 @@ class ToolDefinition:
             raise ToolValidationError(self.name, e) from e
         return self.handler(**validated.model_dump())
 
-    def to_prompt_section(self) -> str:
-        """Generar la sección de esta tool para incluir en el system prompt.
-
-        Formato:
-
-            ## nombre_tool
-            Descripción de la tool.
-            Categoría: read
-            Args:
-              - arg_name (tipo, requerido): descripción del arg
-            Ejemplo:
-            <tool name="nombre_tool">
-              <arg_name>...</arg_name>
-            </tool>
-        """
-        sig = inspect.signature(self.handler)
-
-        # Líneas de args
-        args_lines: list[str] = []
-        for arg_name, param in sig.parameters.items():
-            type_hint = _format_type(param.annotation)
-            if param.default is inspect.Parameter.empty:
-                required = "requerido"
-            else:
-                required = f"opcional, default={param.default!r}"
+    def to_spec(self) -> ToolSpec:
+        """JSON Schema de la tool para el tool calling nativo del provider."""
+        schema = self.pydantic_model.model_json_schema()
+        properties: dict[str, Any] = {}
+        for arg_name, prop in schema.get("properties", {}).items():
+            prop = {k: v for k, v in prop.items() if k != "title"}
             desc = self.args_schema.get(arg_name, "").strip()
-            line = f"  - {arg_name} ({type_hint}, {required})"
             if desc:
-                line += f": {desc}"
-            args_lines.append(line)
-
-        # Bloque de ejemplo
-        if sig.parameters:
-            example_args = "\n".join(
-                f"  <{arg_name}>...</{arg_name}>" for arg_name in sig.parameters
-            )
-            example = f'<tool name="{self.name}">\n{example_args}\n</tool>'
-        else:
-            example = f'<tool name="{self.name}" />'
-
-        args_block = "\n".join(args_lines) if args_lines else "  (ninguno)"
-
-        return (
-            f"## {self.name}\n"
-            f"{self.description}\n"
-            f"Categoría: {self.category.value}\n"
-            f"Args:\n"
-            f"{args_block}\n"
-            f"Ejemplo:\n"
-            f"{example}\n"
-        )
+                prop["description"] = desc
+            properties[arg_name] = prop
+        parameters: dict[str, Any] = {"type": "object", "properties": properties}
+        required = schema.get("required", [])
+        if required:
+            parameters["required"] = required
+        return ToolSpec(name=self.name, description=self.description, parameters=parameters)
 
 
 # ---------------------------------------------------------------------------
@@ -223,16 +184,16 @@ def tool(
 
     Args:
         name: Identificador único de la tool (lo que el modelo emite en
-            `<tool name="...">`).
+            la tool call).
         category: Categoría de permiso para gating.
-        description: Descripción humana que ve el modelo en el prompt.
+        description: Descripción humana que ve el modelo en el schema.
         args_schema: Mapeo opcional `arg_name -> descripción`. Si se
             provee, sus claves DEBEN coincidir exactamente con los args
             de la función. Si no se provee, se genera con descripciones
-            vacías (la tool funciona, pero el prompt es menos descriptivo).
+            vacías (la tool funciona, pero el schema es menos descriptivo).
         aliases: Mapeo opcional `alias -> arg canónico`. Tolera que el
-            modelo emita un nombre de arg alternativo (ej: `slides` por
-            `slides_json`). Cada valor (arg canónico) DEBE existir en la
+            modelo emita un nombre de arg alternativo (ej: `file_path` por
+            `path`). Cada valor (arg canónico) DEBE existir en la
             signature; cada clave (alias) NO debe colisionar con un arg real.
 
     Raises:
@@ -333,12 +294,11 @@ def truncate_with_notice(
 ) -> str:
     """Truncar `text` a `max_chars` agregando un aviso claro al final.
 
-    Las tools de lectura (read_pdf, read_docx, read_pptx) pueden devolver
-    documentos enormes. En modelos locales con `num_ctx` chico, un solo read
-    gigante desaloja del contexto todo lo anterior (el system prompt, lo que
-    el usuario pidió, lecturas previas), y el modelo "olvida" la tarea. Este
-    cap acota cada lectura a un tamaño predecible y le avisa explícitamente
-    al modelo que el contenido sigue, para que no lo trate como completo.
+    Las tools pueden devolver salidas enormes (un archivo grande, un grep
+    amplio). En modelos locales con `num_ctx` chico, una sola salida gigante
+    desaloja del contexto todo lo anterior y el modelo "olvida" la tarea.
+    Este cap acota cada salida a un tamaño predecible y le avisa
+    explícitamente al modelo que hay más, para que no lo trate como completo.
 
     Args:
         text: Texto completo a (posiblemente) truncar.
@@ -361,15 +321,6 @@ def truncate_with_notice(
         notice += " " + more_hint
     notice += " Trabajá con lo mostrado o volvé a leer acotando el rango.]"
     return head + notice
-
-
-def _format_type(annotation: Any) -> str:
-    """Render legible de un type annotation para el prompt."""
-    if annotation is inspect.Parameter.empty:
-        return "any"
-    if hasattr(annotation, "__name__"):
-        return annotation.__name__
-    return str(annotation)
 
 
 def _to_camel(name: str) -> str:

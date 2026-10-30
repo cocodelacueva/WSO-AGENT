@@ -10,16 +10,17 @@ Diseño (espeja a SessionLogger)
     - **No-op por default.** Si `path is None`, `load()` devuelve `[]` y
       `save()` no escribe nada. Tests y runs sin persistencia no tocan disco.
 
-    - **Solo user/assistant.** El system prompt NO se persiste: se reconstruye
-      en cada arranque desde las tools y el contexto, así que guardarlo sería
-      stale. El `AgentLoop.history` ya excluye el system message (se antepone
-      al llamar al modelo), pero filtramos por las dudas.
+    - **Todo menos el system prompt.** Se guardan user, assistant (con sus
+      tool calls) y los resultados de tools, porque las APIs exigen que cada
+      tool call tenga su resultado. El system prompt se reconstruye en cada
+      arranque, así que no se persiste.
 
     - **Escritura atómica.** Se escribe a un `.tmp` y se hace `replace()`, así
       una interrupción a mitad de guardado no deja el archivo corrupto.
 
-    - **Cap de mensajes.** Se conservan los últimos `max_messages` para acotar
-      el archivo y que el contexto no crezca sin límite entre sesiones.
+    - **Cap de mensajes.** Se conservan los últimos `max_messages`, cortando
+      siempre en el inicio de un turno (un mensaje del usuario) para no
+      dejar resultados de tools huérfanos.
 
     - **Tolerante a errores / corrupción.** Si el archivo está corrupto o
       falla la I/O, `load()` devuelve `[]` y `save()` se deshabilita en vez de
@@ -31,7 +32,8 @@ Formato del archivo
       "saved_at": "2026-06-08T12:00:00.000Z",
       "messages": [
         {"role": "user", "content": "..."},
-        {"role": "assistant", "content": "..."}
+        {"role": "assistant", "content": "...", "tool_calls": [...]},
+        {"role": "tool", "content": "...", "tool_call_id": "..."}
       ]
     }
 """
@@ -46,7 +48,7 @@ from pathlib import Path
 
 from wso.agent.model.base import Message
 
-_PERSISTED_ROLES = ("user", "assistant")
+_PERSISTED_ROLES = ("user", "assistant", "tool")
 
 
 def _utc_iso_now() -> str:
@@ -92,13 +94,13 @@ class HistoryStore:
         raw_messages = data.get("messages", []) if isinstance(data, dict) else []
         messages: list[Message] = []
         for item in raw_messages:
-            if not isinstance(item, dict):
+            if not isinstance(item, dict) or item.get("role") not in _PERSISTED_ROLES:
                 continue
-            role = item.get("role")
-            content = item.get("content")
-            if role in _PERSISTED_ROLES and isinstance(content, str):
-                messages.append(Message(role=role, content=content))
-        return messages[-self.max_messages :]
+            try:
+                messages.append(Message.from_dict(item))
+            except (KeyError, TypeError, ValueError):
+                return []  # formato viejo o corrupto: arrancamos limpio
+        return _trim(messages, self.max_messages)
 
     def save(self, messages: list[Message]) -> None:
         """Persistir el historial (solo user/assistant, últimos max_messages)."""
@@ -106,10 +108,10 @@ class HistoryStore:
             return
         assert self.path is not None
 
-        kept = [m for m in messages if m.role in _PERSISTED_ROLES][-self.max_messages :]
+        kept = _trim([m for m in messages if m.role in _PERSISTED_ROLES], self.max_messages)
         payload = {
             "saved_at": _utc_iso_now(),
-            "messages": [{"role": m.role, "content": m.content} for m in kept],
+            "messages": [m.to_dict() for m in kept],
         }
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -128,3 +130,12 @@ class HistoryStore:
             return
         with contextlib.suppress(OSError):
             self.path.unlink(missing_ok=True)
+
+
+def _trim(messages: list[Message], max_messages: int) -> list[Message]:
+    """Últimos `max_messages`, empezando en un mensaje del usuario."""
+    kept = messages[-max_messages:]
+    for i, m in enumerate(kept):
+        if m.role == "user":
+            return kept[i:]
+    return []

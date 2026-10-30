@@ -1,6 +1,7 @@
 """WSO — White Suit Operator.
 
-Agente de terminal conversacional con tools tipadas y permisos granulares.
+Agente de programación de terminal: tools nativas, permisos granulares y
+manejo de contexto pensado para modelos locales con poca VRAM.
 """
 
-__version__ = "0.1.0"
+__version__ = "0.4.0"

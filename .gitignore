@@ -17,7 +17,6 @@ build/
 .venv-*/
 venv/
 env/
-workspace/context/whitesuit_template.pptx
 # Secrets y configuración local
 .env
 .env.local
@@ -30,12 +29,8 @@ config/permissions.toml
 logs/*
 !logs/.gitkeep
 
-# Output del agente (entregables generados)
-workspace/output/*
-!workspace/output/.gitkeep
-
-# Sandbox de run_python (scripts temporales y archivos que cree el código)
-workspace/run/
+# Carpeta de trabajo de versiones anteriores (v0.1-0.3), ya no se usa
+workspace/
 
 # Sistema
 .DS_Store

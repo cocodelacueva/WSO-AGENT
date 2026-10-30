@@ -11,196 +11,81 @@ from wso.ui.console import ConsoleRenderer
 
 
 @pytest.fixture
-def buffer() -> StringIO:
-    return StringIO()
-
-
-@pytest.fixture
-def renderer(buffer: StringIO) -> ConsoleRenderer:
-    console = Console(file=buffer, force_terminal=False, no_color=True, width=80)
+def renderer() -> ConsoleRenderer:
+    console = Console(file=StringIO(), force_terminal=False, no_color=True, width=100)
     return ConsoleRenderer(console=console)
 
 
-class TestUserInput:
-    def test_renders_user_input_with_prefix(
-        self, renderer: ConsoleRenderer, buffer: StringIO
-    ) -> None:
-        renderer.render_user_input("hola WSO")
-        output = buffer.getvalue()
-        assert "hola WSO" in output
-        assert "›" in output
+def output(r: ConsoleRenderer) -> str:
+    return r.console.file.getvalue()  # type: ignore[union-attr]
 
 
-class TestThinking:
-    def test_chunks_concatenate_without_newlines(
-        self, renderer: ConsoleRenderer, buffer: StringIO
-    ) -> None:
-        renderer.render_thinking_chunk("Voy a ")
-        renderer.render_thinking_chunk("pensar ")
-        renderer.render_thinking_chunk("en esto.")
-        output = buffer.getvalue()
+class TestStreaming:
+    def test_text_chunks_concatenate(self, renderer: ConsoleRenderer) -> None:
+        renderer.render_text_chunk("Hola ")
+        renderer.render_text_chunk("mundo")
+        renderer.end_stream()
+        assert output(renderer) == "Hola mundo\n"
 
-        # Los chunks deben estar todos en el output sin newlines entre ellos
-        assert "Voy a pensar en esto." in output
+    def test_newline_between_thinking_and_text(self, renderer: ConsoleRenderer) -> None:
+        renderer.render_thinking_chunk("pienso")
+        renderer.render_text_chunk("respondo")
+        renderer.end_stream()
+        assert output(renderer) == "pienso\nrespondo\n"
 
-    def test_thinking_end_adds_newline(
-        self, renderer: ConsoleRenderer, buffer: StringIO
-    ) -> None:
-        renderer.render_thinking_chunk("razonando")
-        before = buffer.getvalue()
-        renderer.render_thinking_end()
-        after = buffer.getvalue()
+    def test_end_stream_noop_when_idle(self, renderer: ConsoleRenderer) -> None:
+        renderer.end_stream()
+        assert output(renderer) == ""
 
-        # Después de render_thinking_end hay un newline más
-        assert after.count("\n") > before.count("\n")
+    def test_markup_not_interpreted(self, renderer: ConsoleRenderer) -> None:
+        renderer.render_text_chunk("lista[0] = [bold]x[/bold]")
+        assert "[bold]x[/bold]" in output(renderer)
+
+    def test_tool_call_closes_open_stream(self, renderer: ConsoleRenderer) -> None:
+        renderer.render_text_chunk("voy a leer")
+        renderer.render_tool_call("read_file", {"path": "a.py"})
+        assert output(renderer) == "voy a leer\n▶ read_file a.py\n"
 
 
 class TestToolCall:
-    def test_renders_tool_name_and_args(
-        self, renderer: ConsoleRenderer, buffer: StringIO
-    ) -> None:
-        renderer.render_tool_call("read_file", {"path": "/x.md"})
-        output = buffer.getvalue()
+    def test_main_arg_shown_bare(self, renderer: ConsoleRenderer) -> None:
+        renderer.render_tool_call("bash", {"command": "pytest -q", "timeout_s": 60})
+        assert "▶ bash pytest -q timeout_s=60" in output(renderer)
 
-        assert "read_file" in output
-        assert "/x.md" in output
-        assert "▶" in output
+    def test_long_content_hidden(self, renderer: ConsoleRenderer) -> None:
+        renderer.render_tool_call("write_file", {"path": "a.py", "content": "x" * 500})
+        assert "xxxx" not in output(renderer)
 
-    def test_truncates_long_arg_values(
-        self, renderer: ConsoleRenderer, buffer: StringIO
-    ) -> None:
-        long_content = "a" * 500
-        renderer.render_tool_call(
-            "write_file", {"path": "/x", "content": long_content}
-        )
-        output = buffer.getvalue()
-
-        # El contenido completo no debe estar
-        assert "a" * 500 not in output
-        assert "…" in output
-
-    def test_handles_no_args(
-        self, renderer: ConsoleRenderer, buffer: StringIO
-    ) -> None:
-        renderer.render_tool_call("ping", {})
-        output = buffer.getvalue()
-        assert "ping" in output
-        assert "()" in output
+    def test_long_main_arg_truncated(self, renderer: ConsoleRenderer) -> None:
+        renderer.render_tool_call("grep", {"pattern": "p" * 300})
+        assert "…" in output(renderer)
 
 
 class TestObservation:
-    def test_renders_short_result(
-        self, renderer: ConsoleRenderer, buffer: StringIO
-    ) -> None:
-        renderer.render_observation("read_file", "contenido del archivo")
-        output = buffer.getvalue()
+    def test_short_result(self, renderer: ConsoleRenderer) -> None:
+        renderer.render_observation("una línea")
+        assert output(renderer) == "  ← una línea\n"
 
-        assert "contenido del archivo" in output
-        assert "←" in output
+    def test_truncated_by_lines(self, renderer: ConsoleRenderer) -> None:
+        renderer.render_observation("\n".join(f"l{i}" for i in range(50)))
+        out = output(renderer)
+        assert "l0" in out
+        assert "l49" not in out
+        assert "líneas más" in out
 
-    def test_truncates_long_result_by_lines(
-        self, renderer: ConsoleRenderer, buffer: StringIO
-    ) -> None:
-        long_text = "\n".join(f"línea {i}" for i in range(50))
-        renderer.render_observation("read_file", long_text)
-        output = buffer.getvalue()
-
-        assert "líneas más" in output
-        assert "línea 49" not in output
-
-    def test_error_observation_uses_error_marker(
-        self, renderer: ConsoleRenderer, buffer: StringIO
-    ) -> None:
-        renderer.render_observation("read_file", "FileNotFound: /x", is_error=True)
-        output = buffer.getvalue()
-        assert "✗" in output
-        assert "FileNotFound" in output
+    def test_error_marker(self, renderer: ConsoleRenderer) -> None:
+        renderer.render_observation("ERROR: algo", is_error=True)
+        assert "✗ ERROR: algo" in output(renderer)
 
 
-class TestError:
-    def test_renders_error_with_marker(
-        self, renderer: ConsoleRenderer, buffer: StringIO
-    ) -> None:
-        renderer.render_error("modelo no responde")
-        output = buffer.getvalue()
-        assert "✗" in output
-        assert "modelo no responde" in output
+class TestSystemMessages:
+    def test_error(self, renderer: ConsoleRenderer) -> None:
+        renderer.render_error("falló")
+        assert "✗ falló" in output(renderer)
 
-
-class TestFinalAnswer:
-    def test_renders_in_panel(
-        self, renderer: ConsoleRenderer, buffer: StringIO
-    ) -> None:
-        renderer.render_final_answer("Listo, terminé.")
-        output = buffer.getvalue()
-        assert "Respuesta" in output
-        assert "Listo, terminé." in output
-        # Algún tipo de borde de panel
-        assert "╭" in output or "─" in output
-
-    def test_preserves_multiline_content(
-        self, renderer: ConsoleRenderer, buffer: StringIO
-    ) -> None:
-        renderer.render_final_answer("Línea 1\nLínea 2\nLínea 3")
-        output = buffer.getvalue()
-        assert "Línea 1" in output
-        assert "Línea 3" in output
-
-
-class TestQuestion:
-    def test_renders_question_with_options(
-        self, renderer: ConsoleRenderer, buffer: StringIO
-    ) -> None:
-        renderer.render_question(
-            "¿Qué tono querés?",
-            ["Formal", "Casual"],
-            permite_respuesta_libre=True,
-        )
-        output = buffer.getvalue()
-
-        assert "¿Qué tono querés?" in output
-        assert "Formal" in output
-        assert "Casual" in output
-        assert "texto libre" in output
-
-    def test_no_options_section_when_empty(
-        self, renderer: ConsoleRenderer, buffer: StringIO
-    ) -> None:
-        renderer.render_question(
-            "Pregunta abierta",
-            [],
-            permite_respuesta_libre=True,
-        )
-        output = buffer.getvalue()
-
-        assert "Pregunta abierta" in output
-        assert "Opciones:" not in output
-
-    def test_no_free_text_hint_when_disallowed(
-        self, renderer: ConsoleRenderer, buffer: StringIO
-    ) -> None:
-        renderer.render_question(
-            "Elegí una",
-            ["A", "B"],
-            permite_respuesta_libre=False,
-        )
-        output = buffer.getvalue()
-
-        assert "texto libre" not in output
-
-
-class TestSeparatorAndInfo:
-    def test_separator_renders(
-        self, renderer: ConsoleRenderer, buffer: StringIO
-    ) -> None:
+    def test_info_and_separator(self, renderer: ConsoleRenderer) -> None:
+        renderer.render_info("dato")
         renderer.render_separator()
-        output = buffer.getvalue()
-        # rule() produce una línea de guiones
-        assert "─" in output
-
-    def test_info_renders(
-        self, renderer: ConsoleRenderer, buffer: StringIO
-    ) -> None:
-        renderer.render_info("modelo cargado")
-        output = buffer.getvalue()
-        assert "modelo cargado" in output
+        out = output(renderer)
+        assert "dato" in out
+        assert "─" in out

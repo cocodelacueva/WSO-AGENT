@@ -139,8 +139,8 @@ class TestValidateAndCall:
         assert defn.validate_and_call({"name": "Coco", "greeting": "Buen día"}) == "Buen día, Coco"
 
 
-class TestPromptSection:
-    def test_prompt_includes_all_fields(self) -> None:
+class TestToSpec:
+    def test_spec_has_json_schema_with_descriptions(self) -> None:
         @tool(
             name="read_file",
             category=PermissionCategory.READ,
@@ -152,37 +152,38 @@ class TestPromptSection:
 
         defn = get_tool_definition(read_file)
         assert defn is not None
-        section = defn.to_prompt_section()
+        spec = defn.to_spec()
 
-        assert "## read_file" in section
-        assert "Lee un archivo." in section
-        assert "Categoría: read" in section
-        assert "path (str, requerido)" in section
-        assert "ruta del archivo" in section
-        assert '<tool name="read_file">' in section
-        assert "<path>...</path>" in section
+        assert spec.name == "read_file"
+        assert spec.description == "Lee un archivo."
+        assert spec.parameters == {
+            "type": "object",
+            "properties": {"path": {"type": "string", "description": "ruta del archivo"}},
+            "required": ["path"],
+        }
 
-    def test_prompt_marks_optional_args(self) -> None:
+    def test_optional_args_not_required_and_keep_default(self) -> None:
         @tool(name="t", category=PermissionCategory.READ, description="x")
-        def t(a: str, b: int = 5) -> str:
+        def t(a: str, b: int = 5, c: bool = False) -> str:
             return a
 
         defn = get_tool_definition(t)
         assert defn is not None
-        section = defn.to_prompt_section()
-        assert "a (str, requerido)" in section
-        assert "b (int, opcional, default=5)" in section
+        params = defn.to_spec().parameters
+        assert params["required"] == ["a"]
+        assert params["properties"]["b"] == {"type": "integer", "default": 5}
+        assert params["properties"]["c"]["type"] == "boolean"
+        # Pydantic agrega "title"; no aporta al modelo y gasta tokens.
+        assert all("title" not in p for p in params["properties"].values())
 
-    def test_prompt_for_tool_without_args(self) -> None:
+    def test_tool_without_args(self) -> None:
         @tool(name="ping", category=PermissionCategory.READ, description="x")
         def ping() -> str:
             return "pong"
 
         defn = get_tool_definition(ping)
         assert defn is not None
-        section = defn.to_prompt_section()
-        assert "(ninguno)" in section
-        assert '<tool name="ping" />' in section
+        assert defn.to_spec().parameters == {"type": "object", "properties": {}}
 
 
 class TestArgAliases:

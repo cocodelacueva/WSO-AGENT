@@ -3,20 +3,13 @@
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
-from io import StringIO
 from pathlib import Path
 
 import pytest
-from rich.console import Console
 
-from wso.agent.loop import AgentLoop
-from wso.agent.model.base import Message, ModelClient
-from wso.agent.prompts import build_system_prompt
+from tests.fakes import call, make_loop, say
+from wso.agent.model.base import Message, ToolCall
 from wso.history_store import HistoryStore
-from wso.permissions.manager import PermissionManager
-from wso.tools.registry import load_builtin_tools
-from wso.ui.console import ConsoleRenderer
 
 
 def _msgs(*pairs: tuple[str, str]) -> list[Message]:
@@ -48,11 +41,28 @@ class TestSaveLoad:
         assert "system" not in roles
         assert roles == ["user", "assistant"]
 
-    def test_cap_keeps_last_n(self, tmp_path: Path) -> None:
-        store = HistoryStore(path=tmp_path / "h.json", max_messages=2)
-        store.save(_msgs(("user", "1"), ("assistant", "2"), ("user", "3")))
-        loaded = store.load()
-        assert [m.content for m in loaded] == ["2", "3"]
+    def test_cap_keeps_last_n_starting_at_user(self, tmp_path: Path) -> None:
+        store = HistoryStore(path=tmp_path / "h.json", max_messages=3)
+        store.save(
+            _msgs(("user", "1"), ("assistant", "2"), ("user", "3"), ("assistant", "4"))
+        )
+        # Los últimos 3 serían [2, 3, 4], pero no se arranca en un assistant.
+        assert [m.content for m in store.load()] == ["3", "4"]
+
+    def test_roundtrip_tool_calls(self, tmp_path: Path) -> None:
+        store = HistoryStore(path=tmp_path / "h.json")
+        history = [
+            Message(role="user", content="leé a.py"),
+            Message(
+                role="assistant",
+                tool_calls=(ToolCall("c1", "read_file", {"path": "a.py"}),),
+                raw=[{"type": "tool_use", "id": "c1"}],
+            ),
+            Message(role="tool", content="x", tool_call_id="c1", name="read_file", is_error=True),
+            Message(role="assistant", content="listo"),
+        ]
+        store.save(history)
+        assert store.load() == history
 
     def test_cap_applied_on_load_too(self, tmp_path: Path) -> None:
         # Archivo con más mensajes que el cap actual → load recorta.
@@ -113,14 +123,14 @@ class TestNoOpAndRobustness:
                         {"role": "user"},  # sin content
                         {"content": "sin role"},
                         "no es dict",
-                        {"role": "tool", "content": "rol inválido"},
+                        {"role": "robot", "content": "rol inválido"},
                     ]
                 }
             ),
             encoding="utf-8",
         )
         loaded = HistoryStore(path=p).load()
-        assert [(m.role, m.content) for m in loaded] == [("user", "ok")]
+        assert [(m.role, m.content) for m in loaded] == [("user", "ok"), ("user", "")]
 
 
 # ---------------------------------------------------------------------------
@@ -128,80 +138,26 @@ class TestNoOpAndRobustness:
 # ---------------------------------------------------------------------------
 
 
-class _ScriptedModel(ModelClient):
-    def __init__(self, response: str) -> None:
-        self._response = response
-
-    @property
-    def model_name(self) -> str:
-        return "scripted"
-
-    async def stream_chat(self, messages: list[Message]) -> AsyncIterator[str]:
-        yield self._response
-
-
-def _make_loop(tmp_path: Path, store: HistoryStore, history=None) -> AgentLoop:
-    renderer = ConsoleRenderer(
-        console=Console(file=StringIO(), force_terminal=False, no_color=True, width=100)
-    )
-
-    class _S:
-        context_dir = tmp_path / "ctx"
-        automations_dir = tmp_path / "auto"
-        output_dir = tmp_path / "out"
-        permissions_file = tmp_path / "perms.toml"
-
-    for d in (_S.context_dir, _S.automations_dir, _S.output_dir):
-        d.mkdir(parents=True, exist_ok=True)
-
-    tools = load_builtin_tools()
-    model = _ScriptedModel(
-        "<thinking>ok</thinking>"
-        '<tool name="responder_al_usuario"><mensaje>listo</mensaje></tool>'
-    )
-    return AgentLoop(
-        model=model,
-        tools=tools,
-        permissions=PermissionManager(settings=_S()),  # type: ignore[arg-type]
-        renderer=renderer,
-        system_prompt=build_system_prompt(tools),
-        history=history if history is not None else [],
-        history_store=store,
-    )
-
-
 class TestLoopIntegration:
     @pytest.mark.asyncio
-    async def test_turn_persists_history(self, tmp_path: Path) -> None:
+    async def test_turn_persists_history(self, tmp_path: Path, monkeypatch) -> None:
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
         store = HistoryStore(path=tmp_path / "h.json")
-        loop = _make_loop(tmp_path, store)
-
+        loop, _, _ = make_loop(
+            tmp_path, [call("read_file", path="a.py"), say("leído")], history_store=store
+        )
         await loop.execute_turn("hola mundo")
-
-        # Tras el turno, el historial quedó persistido y restaurable.
         restored = store.load()
-        contents = [m.content for m in restored]
-        assert "hola mundo" in contents  # el input del usuario
-        assert any(m.role == "assistant" for m in restored)
-
-    @pytest.mark.asyncio
-    async def test_restored_history_seeds_new_loop(self, tmp_path: Path) -> None:
-        store = HistoryStore(path=tmp_path / "h.json")
-        loop1 = _make_loop(tmp_path, store)
-        await loop1.execute_turn("primer mensaje")
-
-        # Nueva "sesión": cargamos el historial guardado en un loop nuevo.
-        restored = store.load()
-        loop2 = _make_loop(tmp_path, store, history=restored)
-        assert any("primer mensaje" in m.content for m in loop2.history)
+        assert [m.role for m in restored] == ["user", "assistant", "tool", "assistant"]
+        assert restored[0].content == "hola mundo"
 
     @pytest.mark.asyncio
     async def test_reset_clears_history(self, tmp_path: Path) -> None:
         store = HistoryStore(path=tmp_path / "h.json")
-        loop = _make_loop(tmp_path, store)
+        loop, _, _ = make_loop(tmp_path, [say("ok")], history_store=store)
         await loop.execute_turn("algo")
-        assert store.load()  # hay algo guardado
-
+        assert store.load()
         loop._reset_history()
         assert loop.history == []
         assert store.load() == []

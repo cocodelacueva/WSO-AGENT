@@ -12,10 +12,16 @@ from wso.permissions.prompts import (
     ApprovalChoice,
     ApprovalResponse,
     ask_approval,
+    build_preview,
     parse_approval_input,
     render_approval_panel,
 )
 from wso.tools.base import PermissionCategory, ToolDefinition, tool
+
+
+@pytest.fixture(autouse=True)
+def _in_tmp(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.chdir(tmp_path)
 
 
 @pytest.fixture
@@ -118,10 +124,9 @@ class TestAskApproval:
             input_func=lambda prompt: "n",
         )
         output = quiet_console.file.getvalue()  # type: ignore[union-attr]
-        assert "Permiso requerido" in output
         assert "write_file" in output
-        assert "/x" in output
-        assert "Categoría" in output
+        assert "crear" in output
+        assert "+y" in output
 
     def test_feedback_response_propagates(
         self, sample_tool: ToolDefinition, quiet_console: Console
@@ -142,37 +147,49 @@ class TestAskApproval:
 
 
 class TestRenderApprovalPanel:
-    def test_includes_all_options(
+    def test_includes_all_options_and_session_hint(
         self, sample_tool: ToolDefinition, quiet_console: Console
     ) -> None:
-        render_approval_panel(sample_tool, {"path": "/x", "content": "y"}, quiet_console)
-        output = quiet_console.file.getvalue()  # type: ignore[union-attr]
-
-        for letter in ["y", "s", "a", "n"]:
-            assert letter in output
-        assert "feedback" in output
-
-    def test_truncates_long_arg_values(
-        self, sample_tool: ToolDefinition, quiet_console: Console
-    ) -> None:
-        long_content = "x" * 500
         render_approval_panel(
-            sample_tool,
-            {"path": "/x", "content": long_content},
-            quiet_console,
+            sample_tool, {"path": "x", "content": "y"}, quiet_console, session_hint="HINT"
         )
         output = quiet_console.file.getvalue()  # type: ignore[union-attr]
-        # El contenido no debe aparecer entero (se trunca con ellipsis)
-        assert "x" * 500 not in output
-        assert "…" in output
+        for word in ["una vez", "sesión (HINT)", "siempre", "no"]:
+            assert word in output
 
-    def test_displays_category_and_description(
-        self, sample_tool: ToolDefinition, quiet_console: Console
-    ) -> None:
-        render_approval_panel(sample_tool, {"path": "/x", "content": "y"}, quiet_console)
-        output = quiet_console.file.getvalue()  # type: ignore[union-attr]
-        assert "write" in output  # categoría
-        assert "Escribe un archivo" in output  # descripción
+
+class TestBuildPreview:
+    def test_bash_shows_command(self) -> None:
+        assert build_preview("bash", {"command": "pytest -q"}).plain == "$ pytest -q"
+
+    def test_edit_shows_diff(self, tmp_path) -> None:
+        (tmp_path / "m.py").write_text("a = 1\nb = 2\n", encoding="utf-8")
+        plain = build_preview(
+            "edit_file", {"path": "m.py", "old_string": "b = 2", "new_string": "b = 3"}
+        ).plain
+        assert "editar m.py" in plain
+        assert "-b = 2" in plain
+        assert "+b = 3" in plain
+
+    def test_edit_that_does_not_apply_warns(self, tmp_path) -> None:
+        (tmp_path / "m.py").write_text("a = 1\n", encoding="utf-8")
+        plain = build_preview(
+            "edit_file", {"path": "m.py", "old_string": "zzz", "new_string": "y"}
+        ).plain
+        assert "no se puede aplicar" in plain
+
+    def test_overwrite_shows_diff(self, tmp_path) -> None:
+        (tmp_path / "f.txt").write_text("viejo\n", encoding="utf-8")
+        plain = build_preview("write_file", {"path": "f.txt", "content": "nuevo\n"}).plain
+        assert "sobrescribir f.txt" in plain
+        assert "-viejo" in plain and "+nuevo" in plain
+
+    def test_new_file_preview_is_clipped(self) -> None:
+        content = "\n".join(f"line{i}" for i in range(200))
+        plain = build_preview("write_file", {"path": "new.txt", "content": content}).plain
+        assert "+line0" in plain
+        assert "+line199" not in plain
+        assert "líneas más" in plain
 
 
 # ---------------------------------------------------------------------------

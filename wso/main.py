@@ -1,24 +1,26 @@
 """Entry point CLI de WSO.
 
 Uso:
-    wso                  # arranca el REPL conversacional
+    cd mi-proyecto
+    wso                  # arranca el REPL sobre la carpeta actual
     python -m wso.main   # equivalente
 
 Este módulo solo orquesta la inicialización de las dependencias y
-delega al `AgentLoop`. Cualquier lógica de agente, parsing o tools
-vive en otros módulos.
+delega al `AgentLoop`.
 """
 
 from __future__ import annotations
 
 import asyncio
 import sys
+from pathlib import Path
 
 from rich.console import Console
 
+from wso import __version__
 from wso.agent.loop import AgentLoop
 from wso.agent.model.factory import build_model_client
-from wso.agent.prompts import build_system_prompt, load_context_files
+from wso.agent.prompts import build_system_prompt, detect_git_branch, load_project_instructions
 from wso.config import settings
 from wso.history_store import HistoryStore
 from wso.permissions.manager import PermissionManager
@@ -30,19 +32,7 @@ from wso.ui.console import ConsoleRenderer
 def main() -> int:
     """Punto de entrada sincrónico llamado por el script `wso`."""
     console = Console()
-    console.print("[bold cyan]White Suit Operator[/bold cyan] v0.1.0")
-    console.print(f"Modo: [yellow]{settings.mode}[/yellow]")
-
-    if settings.mode == "local":
-        console.print(f"Modelo local: {settings.local_model} @ {settings.local_url}")
-    else:
-        console.print(
-            f"Provider cloud: {settings.cloud_provider} "
-            f"({settings.cloud_model})"
-        )
-
-    console.print()
-
+    console.print(f"[bold cyan]WSO[/bold cyan] v{__version__} · [dim]{Path.cwd()}[/dim]")
     try:
         return asyncio.run(_run(console))
     except KeyboardInterrupt:
@@ -51,44 +41,27 @@ def main() -> int:
 
 
 async def _run(console: Console) -> int:
-    """Loop principal asincrónico: arma todas las dependencias y arranca el REPL."""
     renderer = ConsoleRenderer(console=console)
+    cwd = Path.cwd()
 
-    # Asegurar que las carpetas de workspace existan (primer run)
-    _ensure_workspace_dirs()
-
-    # Construir cliente de modelo
     try:
         model = build_model_client(settings)
-    except (ValueError, NotImplementedError) as e:
+    except ValueError as e:
         renderer.render_error(f"Error de configuración: {e}")
         return 1
     except ImportError as e:
         renderer.render_error(f"Falta dependencia: {e}")
         return 1
 
-    # Cargar tools, contexto, permisos
-    tools = load_builtin_tools()
-    permissions = PermissionManager(settings=settings)
-    context = load_context_files(settings.context_dir)
-    system_prompt = build_system_prompt(tools, context=context)
+    instructions, instructions_path = load_project_instructions(cwd)
+    if instructions_path is not None:
+        renderer.render_info(f"Instrucciones del proyecto: {instructions_path.name}")
+    system_prompt = build_system_prompt(cwd, instructions, detect_git_branch(cwd))
 
-    if context:
-        renderer.render_info(
-            f"Contexto cargado desde {settings.context_dir} "
-            f"({len(context)} caracteres)."
-        )
-
-    # Logger estructurado (opt-in via WSO_LOG_ENABLED). Si está deshabilitado,
-    # el logger es no-op y no toca el disco.
-    session_log = SessionLogger(
-        log_dir=settings.logs_dir if settings.log_enabled else None
-    )
+    session_log = SessionLogger(log_dir=settings.logs_dir if settings.log_enabled else None)
     if session_log.enabled:
         renderer.render_info(f"Logging habilitado: {session_log.path}")
 
-    # Persistencia de historial (opt-in via WSO_HISTORY_PERSIST). Si está
-    # deshabilitada, el store es no-op y no toca el disco.
     history_store = HistoryStore(
         path=settings.history_file if settings.history_persist else None,
         max_messages=settings.history_max_messages,
@@ -97,35 +70,22 @@ async def _run(console: Console) -> int:
     if restored:
         renderer.render_info(
             f"Restauré {len(restored)} mensajes de la sesión anterior "
-            f"(escribí /reset para empezar de cero)."
+            "(/reset para empezar de cero)."
         )
 
-    # Construir y arrancar el loop
     loop = AgentLoop(
         model=model,
-        tools=tools,
-        permissions=permissions,
+        tools=load_builtin_tools(),
+        permissions=PermissionManager(settings=settings, project_root=cwd),
         renderer=renderer,
         system_prompt=system_prompt,
         session_log=session_log,
         history=restored,
         history_store=history_store,
+        step_budget=settings.step_budget,
     )
-
     await loop.run_repl()
     return 0
-
-
-def _ensure_workspace_dirs() -> None:
-    """Crear las carpetas de workspace si no existen (primer run)."""
-    for directory in [
-        settings.context_dir,
-        settings.automations_dir,
-        settings.output_dir,
-        settings.config_dir,
-        settings.logs_dir,
-    ]:
-        directory.mkdir(parents=True, exist_ok=True)
 
 
 if __name__ == "__main__":

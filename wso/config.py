@@ -13,7 +13,8 @@ from typing import Literal
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Raíz del proyecto (donde vive .env, config/, workspace/, logs/)
+# Raíz de la instalación de WSO (donde vive .env, config/, logs/). No es el
+# proyecto sobre el que trabaja el agente: ese es el cwd donde corrés `wso`.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -33,63 +34,40 @@ class Settings(BaseSettings):
 
     # --- Configuración local (Ollama) ---
     local_url: str = "http://localhost:11434"
-    local_model: str = "qwen2.5-coder:32b"
+    local_model: str = "qwen2.5-coder:14b"
     local_num_ctx: int = 16384
     """Tamaño del contexto en tokens. Escala el KV cache (y la VRAM) linealmente.
 
-    Default 16384: da headroom para tareas con lecturas grandes (resumir un
-    PDF, armar un deck desde un docx). Con num_ctx chico (4096-8192) un solo
-    read grande desaloja del contexto el system prompt y lo que el usuario
-    pidió, y el modelo "olvida" la tarea a mitad de camino.
-
-    Ajustá según tu hardware:
-      - 14B en GPU de 16GB: 16384 entra cómodo (~13GB total).
-      - 32B o GPU chica: bajá a 8192/4096 para no spillear a CPU
-        (mirá `ollama ps`: querés ver `100% GPU`)."""
+    Con un 14B en Q4 (~9GB de pesos) en una GPU de 16GB:
+      - 16384 con KV cache f16 → ~12.5GB total, entra.
+      - 32768 con KV cache q8_0 → ~12.5GB total, entra. Requiere en el
+        servidor de Ollama: OLLAMA_FLASH_ATTENTION=1 y OLLAMA_KV_CACHE_TYPE=q8_0.
+    Mirá `ollama ps`: querés ver `100% GPU`. El loop mantiene el historial
+    por debajo de este número (si se excede, Ollama recorta en silencio)."""
 
     # --- Configuración cloud ---
-    cloud_provider: Literal["anthropic", "openai", "google"] | None = None
+    cloud_provider: Literal["anthropic", "openai"] | None = None
     cloud_model: str | None = None
 
-    # Base URL custom para endpoints OpenAI-compatible (OpenRouter,
-    # Together.ai, Groq, Azure, vLLM local, etc). Solo aplica si
-    # cloud_provider="openai". Si es None usa la API default de OpenAI.
     openai_base_url: str | None = None
+    """Endpoint OpenAI-compatible (OpenRouter, Groq, Gemini, vLLM, ...).
+    Solo aplica si cloud_provider="openai". None = API de OpenAI."""
 
-    # --- Browser bridge (v0.3) ---
-    browser_cdp_url: str = "http://localhost:9222"
-    """Endpoint CDP del Chrome real al que se attachea el browser bridge.
-    El usuario arranca Chrome con remote debugging vía
-    scripts/launch-chrome-cdp.sh (default port 9222). El agente NO arranca
-    un Chrome propio: se conecta a este, reutilizando sesiones/cookies."""
+    openai_context_window: int = 128_000
+    """Contexto del modelo OpenAI/compatible (no hay forma estándar de leerlo)."""
+
+    anthropic_thinking: bool = True
+    """Thinking adaptive (visible resumido). Desactivalo para modelos viejos
+    que no lo soportan."""
+
+    anthropic_effort: str | None = "high"
+    """low | medium | high | xhigh | max. Vacío = default del modelo."""
 
     # --- API Keys (sin prefijo WSO_, son convenciones globales) ---
     anthropic_api_key: SecretStr | None = Field(default=None, alias="ANTHROPIC_API_KEY")
     openai_api_key: SecretStr | None = Field(default=None, alias="OPENAI_API_KEY")
-    google_api_key: SecretStr | None = Field(default=None, alias="GOOGLE_API_KEY")
 
     # --- Paths derivados (no van en .env) ---
-    @property
-    def workspace_dir(self) -> Path:
-        return PROJECT_ROOT / "workspace"
-
-    @property
-    def context_dir(self) -> Path:
-        return self.workspace_dir / "context"
-
-    @property
-    def automations_dir(self) -> Path:
-        return self.workspace_dir / "automations"
-
-    @property
-    def output_dir(self) -> Path:
-        return self.workspace_dir / "output"
-
-    @property
-    def run_dir(self) -> Path:
-        """cwd del sandbox de run_python. Los scripts se ejecutan acá."""
-        return self.workspace_dir / "run"
-
     @property
     def config_dir(self) -> Path:
         return PROJECT_ROOT / "config"
@@ -107,39 +85,33 @@ class Settings(BaseSettings):
         """Archivo donde se persiste el historial entre sesiones."""
         return PROJECT_ROOT / ".wso_history.json"
 
-    # --- Constantes del loop ---
-    step_budget: int = 10
-    """Cantidad máxima de tool calls antes de pedir continuación."""
+    # --- Loop ---
+    step_budget: int = 25
+    """Tool calls por turno antes de preguntar si seguir. Programar lleva
+    más pasos que una tarea de oficina (leer, editar, correr tests, corregir)."""
 
-    # --- run_python (sandbox) ---
-    run_python_timeout: int = 30
-    """Timeout default (segundos) para run_python. También actúa como tope:
-    el modelo no puede pedir más que esto."""
+    # --- bash ---
+    bash_timeout: int = 120
+    """Timeout default (segundos) de un comando."""
 
-    run_python_max_memory_mb: int = 512
-    """Límite de memoria (RLIMIT_AS) del subprocess en Linux. En macOS no se
-    aplica (RLIMIT_AS es poco confiable ahí); se confía en el timeout."""
+    bash_max_timeout: int = 600
+    """Tope de timeout que el modelo puede pedir."""
 
-    run_python_max_output_chars: int = 16000
-    """Tope de caracteres de stdout/stderr devueltos (trunca con aviso)."""
+    bash_max_output_chars: int = 10000
+    """Tope de salida devuelta al modelo (se conserva principio y final)."""
 
     # --- Persistencia de historial ---
     history_persist: bool = False
-    """Si True, el historial de la conversación se guarda tras cada turno y
-    se restaura al arrancar `wso`, dando continuidad entre sesiones. Default
-    off (igual que el logging): no toca disco si no lo pedís. El comando
-    `/reset` en el REPL borra el historial guardado."""
+    """Si True, el historial se guarda tras cada turno y se restaura al
+    arrancar `wso`. `/reset` lo borra."""
 
     history_max_messages: int = 200
-    """Tope de mensajes guardados/restaurados. Acota el archivo y evita que
-    el contexto crezca sin límite entre sesiones (se conservan los últimos N)."""
+    """Tope de mensajes guardados/restaurados (se conservan los últimos N)."""
 
     # --- Logging estructurado ---
     log_enabled: bool = False
     """Si True, cada sesión escribe un .jsonl a `logs_dir` con todos los
-    eventos del agente (turn_start, tool_call, observation, permission, etc).
-    Útil para debug post-mortem, auditoría, y replay de sesiones.
-    Default off para no llenar disco si no lo necesitás."""
+    eventos del agente."""
 
 
 # Instancia única reutilizable. Importar como `from wso.config import settings`.

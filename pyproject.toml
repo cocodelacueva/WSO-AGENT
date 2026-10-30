@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "wso"
-version = "0.1.0"
-description = "White Suit Operator — agente local de terminal para tareas de estudio"
+version = "0.4.0"
+description = "White Suit Operator — agente de programación de terminal (local o cloud)"
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Proprietary" }
@@ -13,7 +13,7 @@ authors = [
     { name = "White Suit Studio" },
 ]
 dependencies = [
-    "ollama>=0.3.0",
+    "ollama>=0.4.0",
     "pydantic>=2.7",
     "pydantic-settings>=2.3",
     "rich>=13.7",
@@ -29,38 +29,19 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.5",
     "mypy>=1.10",
-    # reportlab: genera PDFs con texto extraíble para los tests de read_pdf.
-    "reportlab>=4.0",
 ]
 # Cloud providers (instalá solo el que vayas a usar)
-google = ["google-generativeai>=0.8"]
-anthropic = ["anthropic>=0.40"]
+anthropic = ["anthropic>=0.100"]
+# OpenAI y cualquier endpoint compatible (OpenRouter, Groq, Gemini, vLLM, ...)
 openai = ["openai>=1.50"]
-# Tools de Office (instalá si vas a generar/leer .pptx, .xlsx, .pdf, .docx)
-office = [
-    "python-pptx>=1.0",
-    "openpyxl>=3.1",
-    "pypdf>=4.0",
-    "python-docx>=1.1",
-]
-# Browser bridge (v0.3): attach por CDP a tu Chrome real vía Playwright.
-browser = ["playwright>=1.40"]
-# Meta-extra: todo lo opcional de una. Útil para desarrollo activo.
-# Equivalente a [dev,office,google,anthropic,openai].
+# Meta-extra: todo lo opcional de una.
 all = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.5",
     "mypy>=1.10",
-    "reportlab>=4.0",
-    "python-pptx>=1.0",
-    "openpyxl>=3.1",
-    "pypdf>=4.0",
-    "python-docx>=1.1",
-    "google-generativeai>=0.8",
-    "anthropic>=0.40",
+    "anthropic>=0.100",
     "openai>=1.50",
-    "playwright>=1.40",
 ]
 
 [project.scripts]
@@ -68,7 +49,7 @@ wso = "wso.main:main"
 
 [tool.setuptools.packages.find]
 include = ["wso*"]
-exclude = ["tests*", "workspace*"]
+exclude = ["tests*"]
 
 [tool.ruff]
 line-length = 100

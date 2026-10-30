@@ -1,7 +1,8 @@
 """UI de aprobación de permisos en la terminal.
 
 Cuando una tool necesita confirmación, esta función:
-    1. Renderiza un panel con la acción concreta y sus argumentos.
+    1. Renderiza un panel con la acción concreta: el diff para ediciones,
+       el contenido para archivos nuevos, el comando para bash.
     2. Lee la respuesta del usuario (códigos de un caracter o texto libre).
     3. Devuelve un `ApprovalResponse` estructurado.
 
@@ -19,15 +20,18 @@ y/s/a/n/empty se trata como feedback.
 
 from __future__ import annotations
 
+import difflib
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.panel import Panel
 from rich.text import Text
 
 from wso.tools.base import ToolDefinition
+from wso.tools.filesystem import apply_edit, display_path, resolve_path
 
 
 class ApprovalChoice(Enum):
@@ -45,7 +49,6 @@ class ApprovalResponse:
     """Texto libre si choice == DENY_WITH_FEEDBACK; None en otros casos."""
 
 
-# Códigos válidos (case-insensitive)
 _CODE_TO_CHOICE: dict[str, ApprovalChoice] = {
     "y": ApprovalChoice.APPROVE_ONCE,
     "s": ApprovalChoice.APPROVE_SESSION,
@@ -53,85 +56,154 @@ _CODE_TO_CHOICE: dict[str, ApprovalChoice] = {
     "n": ApprovalChoice.DENY,
 }
 
+_MAX_PREVIEW_LINES = 60
+
 
 def parse_approval_input(raw: str) -> ApprovalResponse:
     """Parsear el input crudo del usuario en una `ApprovalResponse`.
 
-    Lógica:
-        - Empty (o solo whitespace) → DENY
-        - "y"/"s"/"a"/"n" (case-insensitive) → su choice correspondiente
-        - Cualquier otra cosa → DENY_WITH_FEEDBACK con el texto original
-
-    Esta función está separada para que sea testeable sin I/O.
+    Separada para que sea testeable sin I/O.
     """
     stripped = raw.strip()
     if not stripped:
         return ApprovalResponse(choice=ApprovalChoice.DENY)
-
     code = stripped.lower()
     if code in _CODE_TO_CHOICE:
         return ApprovalResponse(choice=_CODE_TO_CHOICE[code])
+    return ApprovalResponse(choice=ApprovalChoice.DENY_WITH_FEEDBACK, feedback=stripped)
 
-    return ApprovalResponse(
-        choice=ApprovalChoice.DENY_WITH_FEEDBACK,
-        feedback=stripped,
+
+# ---------------------------------------------------------------------------
+# Preview de la acción
+# ---------------------------------------------------------------------------
+
+
+def build_preview(tool_name: str, args: dict[str, Any]) -> Text:
+    """Representación legible de lo que la tool va a hacer."""
+    if tool_name == "bash":
+        return Text(f"$ {args.get('command', '')}", style="bold white")
+    if tool_name == "edit_file":
+        return _preview_edit(args)
+    if tool_name == "write_file":
+        return _preview_write(args)
+    lines = [f"{k} = {_truncate(str(v))}" for k, v in args.items()]
+    return Text("\n".join(lines) or "(sin argumentos)")
+
+
+def _preview_edit(args: dict[str, Any]) -> Text:
+    path = resolve_path(str(args.get("path", "")))
+    header = Text(f"editar {display_path(path)}\n", style="bold")
+    try:
+        old_text = path.read_text(encoding="utf-8")
+        new_text = apply_edit(
+            old_text,
+            str(args.get("old_string", "")),
+            str(args.get("new_string", "")),
+            bool(args.get("replace_all", False)),
+        )
+    except (OSError, ValueError) as e:
+        header.append(f"⚠ La edición no se puede aplicar: {e}", style="yellow")
+        return header
+    header.append_text(_diff(old_text, new_text, display_path(path)))
+    return header
+
+
+def _preview_write(args: dict[str, Any]) -> Text:
+    path = resolve_path(str(args.get("path", "")))
+    content = str(args.get("content", ""))
+    if path.is_file():
+        try:
+            old_text = path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            old_text = ""
+        header = Text(f"sobrescribir {display_path(path)}\n", style="bold")
+        header.append_text(_diff(old_text, content, display_path(path)))
+        return header
+    header = Text(f"crear {display_path(path)}\n", style="bold")
+    header.append_text(_clip_lines([f"+{line}" for line in content.splitlines()]))
+    return header
+
+
+def _diff(old: str, new: str, name: str) -> Text:
+    lines = list(
+        difflib.unified_diff(
+            old.splitlines(), new.splitlines(), fromfile=name, tofile=name, lineterm="", n=2
+        )
     )
+    return _clip_lines(lines[2:] if len(lines) > 2 else ["(sin cambios)"])
+
+
+def _clip_lines(lines: list[str]) -> Text:
+    out = Text()
+    for line in lines[:_MAX_PREVIEW_LINES]:
+        if line.startswith("+"):
+            style = "green"
+        elif line.startswith("-"):
+            style = "red"
+        elif line.startswith("@@"):
+            style = "cyan"
+        else:
+            style = "dim"
+        out.append(_truncate(line, 200) + "\n", style=style)
+    if len(lines) > _MAX_PREVIEW_LINES:
+        out.append(f"… ({len(lines) - _MAX_PREVIEW_LINES} líneas más)\n", style="dim")
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Panel + input
+# ---------------------------------------------------------------------------
 
 
 def render_approval_panel(
     tool: ToolDefinition,
-    args: dict[str, str],
+    args: dict[str, Any],
     console: Console,
+    session_hint: str = "esta acción",
 ) -> None:
     """Renderizar el panel de aprobación (sin leer input)."""
-    args_str = ", ".join(f"{k}={_truncate(str(v))!r}" for k, v in args.items())
+    options = Text()
+    options.append("\n  y ", style="bold")
+    options.append("una vez   ")
+    options.append("s ", style="bold")
+    options.append(f"sesión ({session_hint})   ")
+    options.append("a ", style="bold")
+    options.append("siempre   ")
+    options.append("n ", style="bold")
+    options.append("no   ")
+    options.append("[texto] ", style="bold")
+    options.append("no, y decirle qué hacer")
 
-    body = Text()
-    body.append("El agente quiere ejecutar:\n\n", style="bold yellow")
-    body.append(f"  {tool.name}(", style="cyan")
-    body.append(args_str, style="white")
-    body.append(")\n\n", style="cyan")
-    body.append("Categoría: ", style="dim")
-    body.append(f"{tool.category.value}\n", style="bold")
-    body.append("Descripción: ", style="dim")
-    body.append(f"{tool.description}\n\n", style="dim italic")
-    body.append("Opciones:\n", style="bold")
-    body.append("  y       — aprobar una vez\n")
-    body.append("  s       — aprobar para esta sesión\n")
-    body.append("  a       — aprobar siempre (persiste en config)\n")
-    body.append("  n       — rechazar\n")
-    body.append("  [texto] — rechazar con feedback al agente\n")
-
-    console.print(Panel(body, title="⚠  Permiso requerido", border_style="yellow"))
+    console.print(
+        Panel(
+            Group(build_preview(tool.name, args), options),
+            title=f"⚠  {tool.name}",
+            title_align="left",
+            border_style="yellow",
+        )
+    )
 
 
 def ask_approval(
     tool: ToolDefinition,
-    args: dict[str, str],
+    args: dict[str, Any],
     console: Console | None = None,
     input_func: Callable[[str], str] | None = None,
+    session_hint: str = "esta acción",
 ) -> ApprovalResponse:
     """Mostrar prompt de aprobación, leer respuesta del usuario, devolver decisión.
 
-    Args:
-        tool: Definición de la tool que requiere aprobación.
-        args: Args con los que se va a ejecutar.
-        console: Console de Rich para rendering. Se crea uno default si None.
-        input_func: Función para leer input. Default: input() builtin.
-            Inyectable para facilitar tests.
+    `input_func` es inyectable para tests (default: `input`).
     """
     if console is None:
         console = Console()
     if input_func is None:
         input_func = input
-
-    render_approval_panel(tool, args, console)
-    raw = input_func("> ")
-    return parse_approval_input(raw)
+    render_approval_panel(tool, args, console, session_hint)
+    return parse_approval_input(input_func("> "))
 
 
 def _truncate(value: str, max_length: int = 80) -> str:
-    """Truncar valores largos para el display (ej: contenido de write_file)."""
     if len(value) <= max_length:
         return value
     return value[: max_length - 1] + "…"

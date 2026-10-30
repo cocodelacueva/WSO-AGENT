@@ -1,7 +1,4 @@
-"""Factory que instancia el ModelClient correcto según la config.
-
-Lee `settings.mode` y devuelve la implementación apropiada.
-"""
+"""Factory que instancia el ModelClient correcto según la config."""
 
 from __future__ import annotations
 
@@ -13,10 +10,8 @@ def build_model_client(settings: Settings) -> ModelClient:
     """Instanciar el cliente de modelo según la configuración.
 
     Raises:
-        NotImplementedError: si el modo cloud está pedido pero el
-            provider correspondiente todavía no está implementado.
-        ValueError: si la config es inconsistente (ej: cloud sin
-            provider, o sin API key).
+        ValueError: si la config es inconsistente (ej: cloud sin provider,
+            o sin API key).
     """
     if settings.mode == "local":
         from wso.agent.model.ollama import OllamaClient
@@ -42,6 +37,8 @@ def build_model_client(settings: Settings) -> ModelClient:
                 return AnthropicClient(
                     api_key=settings.anthropic_api_key.get_secret_value(),
                     model=settings.cloud_model,
+                    thinking=settings.anthropic_thinking,
+                    effort=settings.anthropic_effort or None,
                 )
             case "openai":
                 from wso.agent.model.openai import OpenAIClient
@@ -52,15 +49,7 @@ def build_model_client(settings: Settings) -> ModelClient:
                     api_key=settings.openai_api_key.get_secret_value(),
                     model=settings.cloud_model,
                     base_url=settings.openai_base_url,
-                )
-            case "google":
-                from wso.agent.model.google import GoogleClient
-
-                if settings.google_api_key is None:
-                    raise ValueError("Provider google requiere GOOGLE_API_KEY.")
-                return GoogleClient(
-                    api_key=settings.google_api_key.get_secret_value(),
-                    model=settings.cloud_model,
+                    context_window=settings.openai_context_window,
                 )
 
     raise ValueError(f"Modo desconocido: {settings.mode!r}")

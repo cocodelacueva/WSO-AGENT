@@ -1,1 +1,1 @@
-"""Tools del agente: filesystem, control de flujo, ejecución de código."""
+"""Tools del agente: archivos, búsqueda y shell."""

@@ -1,155 +1,61 @@
-"""Tests del builder del system prompt."""
+"""Tests del system prompt y la carga de instrucciones del proyecto."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from wso.agent.prompts import build_system_prompt, load_context_files
-from wso.tools.base import PermissionCategory, tool
-from wso.tools.registry import ToolRegistry, load_builtin_tools
+from wso.agent.prompts import (
+    MAX_INSTRUCTIONS_CHARS,
+    build_system_prompt,
+    detect_git_branch,
+    load_project_instructions,
+)
 
 
 class TestBuildSystemPrompt:
-    def test_includes_all_v1_tools(self) -> None:
-        registry = load_builtin_tools()
-        prompt = build_system_prompt(registry)
+    def test_includes_environment(self, tmp_path: Path) -> None:
+        prompt = build_system_prompt(tmp_path, git_branch="main")
+        assert str(tmp_path) in prompt
+        assert "rama: main" in prompt
 
-        for tool_name in [
-            "read_file",
-            "write_file",
-            "delete_file",
-            "list_directory",
-            "responder_al_usuario",
-            "preguntar_al_usuario",
-        ]:
-            assert f"## {tool_name}" in prompt
+    def test_no_git(self, tmp_path: Path) -> None:
+        assert "No es un repo de git" in build_system_prompt(tmp_path)
 
-    def test_includes_operation_rules(self) -> None:
-        registry = load_builtin_tools()
-        prompt = build_system_prompt(registry)
+    def test_instructions_section_only_when_present(self, tmp_path: Path) -> None:
+        assert "Instrucciones del proyecto" not in build_system_prompt(tmp_path)
+        prompt = build_system_prompt(tmp_path, instructions="Usá pytest -q.")
+        assert "# Instrucciones del proyecto\nUsá pytest -q." in prompt
 
-        # Las reglas clave que el modelo debe seguir
-        assert "Reglas de operación" in prompt
-        assert "thinking" in prompt
-        assert "responder_al_usuario" in prompt
-        assert "preguntar_al_usuario" in prompt
-        assert "UNA sola acción por respuesta" in prompt
+    def test_is_short(self, tmp_path: Path) -> None:
+        # Con tools nativas el prompt no describe tools: tiene que ser chico
+        # para dejar contexto libre en modelos locales.
+        assert len(build_system_prompt(tmp_path)) < 3500
 
-    def test_includes_file_discipline_guardrails(self) -> None:
-        registry = load_builtin_tools()
-        prompt = build_system_prompt(registry)
-
-        # Guardrails añadidos tras la prueba 2 (errores del modelo local).
-        assert "Disciplina de archivos y rutas" in prompt
-        assert "RESPETÁ LA CARPETA DEL USUARIO" in prompt
-        assert "NO ALUCINES NOMBRES DE ARCHIVO" in prompt
-        assert "LISTÁ EL DIRECTORIO" in prompt
-
-    def test_includes_browser_capability_section(self) -> None:
-        registry = load_builtin_tools()
-        prompt = build_system_prompt(registry)
-
-        # El modelo debe entender que maneja un navegador real y no rechazar
-        # tareas de browsing por "no puedo acceder a sitios web".
-        assert "tenés un navegador real" in prompt
-        assert "NUNCA digas" in prompt
-        assert "browser_read_page" in prompt
-        # Guardrail de integridad: no inventar datos de perfiles.
-        assert "NUNCA inventes" in prompt
-
-    def test_includes_few_shot_example(self) -> None:
-        registry = load_builtin_tools()
-        prompt = build_system_prompt(registry)
-
-        assert "Ejemplo de un turno bien hecho" in prompt
-        # El ejemplo debe mostrar el patrón thinking + tool + observation + thinking + tool
-        assert prompt.count("<thinking>") >= 2
-        assert "<observation" in prompt
-
-    def test_context_section_with_no_context(self) -> None:
-        registry = load_builtin_tools()
-        prompt = build_system_prompt(registry, context="")
-
-        assert "(sin contexto adicional cargado)" in prompt
-
-    def test_context_section_with_provided_context(self) -> None:
-        registry = load_builtin_tools()
-        ctx = "Devs del estudio: María, Pedro, Juan."
-        prompt = build_system_prompt(registry, context=ctx)
-
-        assert ctx in prompt
-        assert "(sin contexto adicional cargado)" not in prompt
-
-    def test_empty_registry_does_not_crash(self) -> None:
-        registry = ToolRegistry()
-        prompt = build_system_prompt(registry)
-
-        assert "Tools disponibles" in prompt
-        # El registry vacío produce un placeholder
-        assert "ninguna" in prompt.lower()
-
-    def test_custom_tool_appears_in_prompt(self) -> None:
-        @tool(
-            name="my_custom",
-            category=PermissionCategory.READ,
-            description="Custom tool de test.",
-            args_schema={"x": "input"},
-        )
-        def my_custom(x: str) -> str:
-            return x
-
-        registry = ToolRegistry()
-        registry.register(my_custom._tool_def)  # type: ignore[attr-defined]
-        prompt = build_system_prompt(registry)
-
-        assert "## my_custom" in prompt
-        assert "Custom tool de test." in prompt
+    def test_explains_how_the_turn_ends(self, tmp_path: Path) -> None:
+        assert "sin llamar tools" in build_system_prompt(tmp_path)
 
 
-class TestLoadContextFiles:
-    def test_empty_dir_returns_empty_string(self, tmp_path: Path) -> None:
-        result = load_context_files(tmp_path)
-        assert result == ""
+class TestLoadProjectInstructions:
+    def test_none(self, tmp_path: Path) -> None:
+        assert load_project_instructions(tmp_path) == ("", None)
 
-    def test_nonexistent_dir_returns_empty(self, tmp_path: Path) -> None:
-        result = load_context_files(tmp_path / "nope")
-        assert result == ""
+    def test_priority_wso_md_first(self, tmp_path: Path) -> None:
+        (tmp_path / "CLAUDE.md").write_text("claude", encoding="utf-8")
+        (tmp_path / "WSO.md").write_text("wso", encoding="utf-8")
+        text, path = load_project_instructions(tmp_path)
+        assert text == "wso"
+        assert path == tmp_path / "WSO.md"
 
-    def test_loads_md_files(self, tmp_path: Path) -> None:
-        (tmp_path / "studio.md").write_text("Info del estudio.")
-        (tmp_path / "devs.md").write_text("Lista de devs.")
+    def test_falls_back_to_agents_md(self, tmp_path: Path) -> None:
+        (tmp_path / "AGENTS.md").write_text("agents", encoding="utf-8")
+        assert load_project_instructions(tmp_path)[0] == "agents"
 
-        result = load_context_files(tmp_path)
-        assert "Info del estudio." in result
-        assert "Lista de devs." in result
+    def test_long_file_clipped(self, tmp_path: Path) -> None:
+        (tmp_path / "WSO.md").write_text("x" * (MAX_INSTRUCTIONS_CHARS + 100), encoding="utf-8")
+        text, _ = load_project_instructions(tmp_path)
+        assert text.endswith("[… recortado]")
 
-    def test_files_get_header_with_filename(self, tmp_path: Path) -> None:
-        (tmp_path / "x.md").write_text("contenido")
 
-        result = load_context_files(tmp_path)
-        assert "## x.md" in result
-
-    def test_ignores_non_md_files(self, tmp_path: Path) -> None:
-        (tmp_path / "data.txt").write_text("debería ignorar esto")
-        (tmp_path / "studio.md").write_text("incluir esto")
-
-        result = load_context_files(tmp_path)
-        assert "incluir esto" in result
-        assert "debería ignorar esto" not in result
-
-    def test_files_loaded_in_sorted_order(self, tmp_path: Path) -> None:
-        (tmp_path / "z_last.md").write_text("último")
-        (tmp_path / "a_first.md").write_text("primero")
-
-        result = load_context_files(tmp_path)
-        first_pos = result.index("primero")
-        last_pos = result.index("último")
-        assert first_pos < last_pos
-
-    def test_skips_empty_files(self, tmp_path: Path) -> None:
-        (tmp_path / "empty.md").write_text("")
-        (tmp_path / "real.md").write_text("contenido real")
-
-        result = load_context_files(tmp_path)
-        assert "## empty.md" not in result
-        assert "contenido real" in result
+class TestDetectGitBranch:
+    def test_not_a_repo(self, tmp_path: Path) -> None:
+        assert detect_git_branch(tmp_path) is None

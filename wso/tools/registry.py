@@ -1,7 +1,7 @@
 """Registry central de tools.
 
-Permite descubrir tools por nombre, listarlas todas para el prompt,
-y ejecutarlas con args validados.
+Permite descubrir tools por nombre y listarlas como `ToolSpec` para el
+tool calling nativo del provider.
 
 El registry se construye importando los módulos de tools (que tienen
 las declaraciones `@tool`) y escaneándolos en busca de funciones con
@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from types import ModuleType
 
+from wso.agent.model.base import ToolSpec
 from wso.tools.base import ToolDefinition, get_tool_definition
 
 
@@ -84,60 +85,26 @@ class ToolRegistry:
             count += 1
         return count
 
-    # ---- Generación de prompt ----
+    # ---- Specs para el provider ----
 
-    def to_prompt_section(self) -> str:
-        """Generar la sección consolidada de tools para el system prompt.
-
-        Concatena las secciones individuales separadas por línea en blanco.
-        El orden coincide con el orden de registro.
-        """
-        if not self._tools:
-            return "(ninguna tool disponible)"
-        return "\n".join(t.to_prompt_section() for t in self._tools.values())
+    def specs(self) -> list[ToolSpec]:
+        """JSON Schema de todas las tools, en orden de registro (estable: cacheable)."""
+        return [t.to_spec() for t in self._tools.values()]
 
 
 def load_builtin_tools() -> ToolRegistry:
-    """Cargar el set built-in de tools.
-
-    Importa los módulos de tools y registra todas sus funciones decoradas
-    con `@tool`. Devuelve un registry listo para usar.
-
-    Las tools de `pptx`, `xlsx`, `pdf` y `docx` quedan registradas sin
-    importar si las deps respectivas están instaladas. Cada paquete se
-    importa lazy: solo falla si el modelo realmente invoca la tool sin
-    tener la extra instalada (con un mensaje guía pidiendo
-    `pip install -e ".[office]"`).
+    """Cargar el set built-in de tools de programación.
 
     Returns:
-        Registry poblado con las 26 tools built-in:
-            - filesystem (4): read_file, write_file, delete_file, list_directory
-            - flow (2):       responder_al_usuario, preguntar_al_usuario
-            - code (1):       run_python
-            - pptx (4):       generate_pptx, read_pptx, edit_pptx_slide,
-                              generate_pptx_from_template
-            - xlsx (4):       generate_xlsx, read_xlsx, edit_xlsx_cell,
-                              append_xlsx_rows
-            - pdf (1):        read_pdf
-            - docx (1):       read_docx
-            - browser (9):    browser_open_tab, browser_navigate,
-                              browser_close_tab, browser_read_page,
-                              browser_screenshot, browser_click,
-                              browser_type, browser_wait_for, browser_scroll
-
-    Las tools de `browser` se registran igual que las de Office: sin importar
-    Playwright. Solo fallan al invocarse si falta la extra `[browser]` o si
-    Chrome no está corriendo con CDP (mensaje guía en ambos casos).
+        Registry con 6 tools:
+            - filesystem: read_file, write_file, edit_file
+            - search:     glob, grep
+            - shell:      bash
     """
-    from wso.tools import browser, code, docx, filesystem, flow, pdf, pptx, xlsx
+    from wso.tools import filesystem, search, shell
 
     registry = ToolRegistry()
     registry.register_module(filesystem)
-    registry.register_module(flow)
-    registry.register_module(pptx)
-    registry.register_module(xlsx)
-    registry.register_module(pdf)
-    registry.register_module(docx)
-    registry.register_module(browser)
-    registry.register_module(code)
+    registry.register_module(search)
+    registry.register_module(shell)
     return registry

@@ -93,101 +93,40 @@ class TestToolRegistry:
         count = registry.register_module(module)
         assert count == 1
 
-    def test_to_prompt_section_empty(self) -> None:
-        registry = ToolRegistry()
-        section = registry.to_prompt_section()
-        assert "ninguna" in section.lower()
+    def test_specs_empty(self) -> None:
+        assert ToolRegistry().specs() == []
 
-    def test_to_prompt_section_combines_all(self) -> None:
+    def test_specs_in_registration_order(self) -> None:
         registry = ToolRegistry()
         registry.register(_make_def("alpha"))
         registry.register(_make_def("beta"))
-
-        section = registry.to_prompt_section()
-        assert "## alpha" in section
-        assert "## beta" in section
+        assert [s.name for s in registry.specs()] == ["alpha", "beta"]
 
 
 class TestLoadBuiltinTools:
-    def test_loads_all_builtin_tools(self) -> None:
+    def test_loads_coding_tools(self) -> None:
         registry = load_builtin_tools()
-
-        expected = {
-            # filesystem
-            "read_file",
-            "write_file",
-            "delete_file",
-            "list_directory",
-            # flow
-            "responder_al_usuario",
-            "preguntar_al_usuario",
-            # code (v0.3)
-            "run_python",
-            # pptx (v0.2)
-            "generate_pptx",
-            "read_pptx",
-            "edit_pptx_slide",
-            "generate_pptx_from_template",
-            # xlsx (v0.2)
-            "generate_xlsx",
-            "read_xlsx",
-            "edit_xlsx_cell",
-            "append_xlsx_rows",
-            # pdf / docx (v0.2)
-            "read_pdf",
-            "read_docx",
-            # browser (v0.3)
-            "browser_open_tab",
-            "browser_navigate",
-            "browser_close_tab",
-            "browser_read_page",
-            "browser_screenshot",
-            "browser_click",
-            "browser_type",
-            "browser_wait_for",
-            "browser_scroll",
+        assert {t.name for t in registry.all()} == {
+            "read_file", "write_file", "edit_file", "glob", "grep", "bash",
         }
-        actual = {t.name for t in registry.all()}
-        assert actual == expected
 
     def test_categories_are_correct(self) -> None:
         registry = load_builtin_tools()
+        cats = {t.name: t.category for t in registry.all()}
+        assert cats["read_file"] == PermissionCategory.READ
+        assert cats["glob"] == PermissionCategory.READ
+        assert cats["grep"] == PermissionCategory.READ
+        assert cats["write_file"] == PermissionCategory.WRITE
+        assert cats["edit_file"] == PermissionCategory.WRITE
+        assert cats["bash"] == PermissionCategory.EXECUTE
 
-        assert registry.get("read_file").category == PermissionCategory.READ
-        assert registry.get("list_directory").category == PermissionCategory.READ
-        assert registry.get("write_file").category == PermissionCategory.WRITE
-        assert registry.get("delete_file").category == PermissionCategory.DELETE
-        assert registry.get("responder_al_usuario").category == PermissionCategory.FLOW
-        assert registry.get("preguntar_al_usuario").category == PermissionCategory.FLOW
-        # pptx tools
-        assert registry.get("generate_pptx").category == PermissionCategory.WRITE
-        assert registry.get("read_pptx").category == PermissionCategory.READ
-        assert registry.get("edit_pptx_slide").category == PermissionCategory.WRITE
-        assert registry.get("generate_pptx_from_template").category == PermissionCategory.WRITE
-        # xlsx tools
-        assert registry.get("generate_xlsx").category == PermissionCategory.WRITE
-        assert registry.get("read_xlsx").category == PermissionCategory.READ
-        assert registry.get("edit_xlsx_cell").category == PermissionCategory.WRITE
-        assert registry.get("append_xlsx_rows").category == PermissionCategory.WRITE
-        # pdf / docx tools
-        assert registry.get("read_pdf").category == PermissionCategory.READ
-        assert registry.get("read_docx").category == PermissionCategory.READ
-        # browser tools (v0.3)
-        assert registry.get("browser_open_tab").category == PermissionCategory.BROWSER
-        assert registry.get("browser_navigate").category == PermissionCategory.BROWSER
-        assert registry.get("browser_close_tab").category == PermissionCategory.BROWSER
-        assert registry.get("browser_click").category == PermissionCategory.BROWSER
-        assert registry.get("browser_type").category == PermissionCategory.BROWSER
-        assert registry.get("browser_read_page").category == PermissionCategory.READ
-        assert registry.get("browser_screenshot").category == PermissionCategory.READ
-        assert registry.get("browser_wait_for").category == PermissionCategory.READ
-        assert registry.get("browser_scroll").category == PermissionCategory.READ
-        # code (v0.3)
-        assert registry.get("run_python").category == PermissionCategory.EXECUTE
+    def test_every_tool_has_valid_spec(self) -> None:
+        for spec in load_builtin_tools().specs():
+            assert spec.parameters["type"] == "object"
+            assert spec.description
 
     def test_idempotent_creates_independent_registries(self) -> None:
-        # Cada llamada devuelve un registry nuevo (no comparten estado)
         r1 = load_builtin_tools()
         r2 = load_builtin_tools()
         assert r1 is not r2
-        assert len(r1) == len(r2) == 26
+        assert len(r1) == len(r2) == 6

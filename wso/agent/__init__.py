@@ -1,1 +1,1 @@
-"""Núcleo del agente: loop, parser, prompts, budget y clientes de modelo."""
+"""Núcleo del agente: loop, contexto, prompts, budget y clientes de modelo."""

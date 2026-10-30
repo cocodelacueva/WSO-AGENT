@@ -1,4 +1,4 @@
-"""Tests del PermissionManager."""
+"""Tests del PermissionManager y la clasificación de comandos."""
 
 from __future__ import annotations
 
@@ -10,41 +10,28 @@ from wso.permissions.manager import (
     AlwaysAllowRule,
     PermissionDecision,
     PermissionManager,
+    command_matches_prefix,
+    command_prefix,
+    is_readonly_command,
 )
+from wso.tools.base import ToolDefinition
 from wso.tools.registry import load_builtin_tools
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
+AUTO = PermissionDecision.AUTO_APPROVED
+ASK = PermissionDecision.NEEDS_APPROVAL
 
 
 class FakeSettings:
-    """Settings sintético apuntando a un tmp_path."""
-
     def __init__(self, root: Path) -> None:
-        self.root = root
-        self._context_dir = root / "workspace/context"
-        self._automations_dir = root / "workspace/automations"
-        self._output_dir = root / "workspace/output"
-        self._permissions_file = root / "config/permissions.toml"
-        for d in [self._context_dir, self._automations_dir, self._output_dir]:
-            d.mkdir(parents=True, exist_ok=True)
+        self.permissions_file = root / "config" / "permissions.toml"
 
-    @property
-    def context_dir(self) -> Path:
-        return self._context_dir
 
-    @property
-    def automations_dir(self) -> Path:
-        return self._automations_dir
-
-    @property
-    def output_dir(self) -> Path:
-        return self._output_dir
-
-    @property
-    def permissions_file(self) -> Path:
-        return self._permissions_file
+@pytest.fixture
+def project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    monkeypatch.chdir(proj)
+    return proj
 
 
 @pytest.fixture
@@ -53,388 +40,139 @@ def settings(tmp_path: Path) -> FakeSettings:
 
 
 @pytest.fixture
-def manager(settings: FakeSettings) -> PermissionManager:
-    return PermissionManager(settings=settings)  # type: ignore[arg-type]
+def manager(settings: FakeSettings, project: Path) -> PermissionManager:
+    return PermissionManager(settings=settings, project_root=project)  # type: ignore[arg-type]
 
 
 @pytest.fixture
-def registry():
-    return load_builtin_tools()
+def tools() -> dict[str, ToolDefinition]:
+    return {t.name: t for t in load_builtin_tools().all()}
 
 
-# ---------------------------------------------------------------------------
-# Reglas básicas: FLOW, READ whitelist, WRITE/DELETE
-# ---------------------------------------------------------------------------
+class TestRead:
+    def test_inside_project_auto(self, manager, tools) -> None:
+        assert manager.check(tools["read_file"], {"path": "src/a.py"}) == AUTO
+        assert manager.check(tools["grep"], {"pattern": "x"}) == AUTO  # path default "."
+
+    def test_outside_project_asks(self, manager, tools, tmp_path: Path) -> None:
+        assert manager.check(tools["read_file"], {"path": str(tmp_path / "other.txt")}) == ASK
+
+    def test_session_allows_that_folder(self, manager, tools, tmp_path: Path) -> None:
+        outside = tmp_path / "libs"
+        outside.mkdir()
+        manager.remember_session(tools["read_file"], {"path": str(outside / "a.py")})
+        assert manager.check(tools["read_file"], {"path": str(outside / "b.py")}) == AUTO
+
+    def test_parent_traversal_is_outside(self, manager, tools) -> None:
+        assert manager.check(tools["read_file"], {"path": "../secret.txt"}) == ASK
 
 
-class TestBasicRules:
-    def test_flow_tools_always_auto_approved(
-        self, manager: PermissionManager, registry
-    ) -> None:
-        for name in ["responder_al_usuario", "preguntar_al_usuario"]:
-            tool = registry.get(name)
-            decision = manager.check(tool, {"mensaje": "hola"})
-            assert decision == PermissionDecision.AUTO_APPROVED
+class TestWrite:
+    def test_asks_by_default(self, manager, tools) -> None:
+        assert manager.check(tools["write_file"], {"path": "a.py", "content": "x"}) == ASK
 
-    def test_read_inside_whitelist_auto_approved(
-        self,
-        manager: PermissionManager,
-        registry,
-        settings: FakeSettings,
-    ) -> None:
-        target = settings.output_dir / "report.md"
-        target.write_text("x")
+    def test_session_approval_covers_all_project_edits(self, manager, tools) -> None:
+        manager.remember_session(tools["edit_file"], {"path": "a.py"})
+        assert manager.check(tools["edit_file"], {"path": "other/b.py"}) == AUTO
+        assert manager.check(tools["write_file"], {"path": "new.py", "content": "x"}) == AUTO
 
-        decision = manager.check(registry.get("read_file"), {"path": str(target)})
-        assert decision == PermissionDecision.AUTO_APPROVED
+    def test_session_outside_project_is_per_file(self, manager, tools, tmp_path: Path) -> None:
+        target = str(tmp_path / "x.txt")
+        manager.remember_session(tools["write_file"], {"path": target})
+        assert manager.check(tools["write_file"], {"path": target, "content": "y"}) == AUTO
+        assert manager.check(tools["write_file"], {"path": str(tmp_path / "z.txt")}) == ASK
+        # y no habilita ediciones del proyecto
+        assert manager.check(tools["write_file"], {"path": "a.py"}) == ASK
 
-    def test_read_outside_whitelist_needs_approval(
-        self,
-        manager: PermissionManager,
-        registry,
-        tmp_path: Path,
-    ) -> None:
-        outside = tmp_path / "private.txt"
-        outside.write_text("x")
+    def test_session_hint(self, manager, tools) -> None:
+        assert "proyecto" in manager.session_scope_hint(tools["edit_file"], {"path": "a.py"})
 
-        decision = manager.check(
-            registry.get("read_file"), {"path": str(outside)}
+
+class TestExecute:
+    def test_readonly_command_auto(self, manager, tools) -> None:
+        assert manager.check(tools["bash"], {"command": "git status"}) == AUTO
+        assert manager.check(tools["bash"], {"command": "ls -la src"}) == AUTO
+
+    def test_readonly_command_outside_project_asks(self, manager, tools) -> None:
+        assert manager.check(tools["bash"], {"command": "cat ~/.ssh/id_rsa"}) == ASK
+        assert manager.check(tools["bash"], {"command": "cat ../../etc/passwd"}) == ASK
+
+    def test_other_command_asks(self, manager, tools) -> None:
+        assert manager.check(tools["bash"], {"command": "pytest -q"}) == ASK
+
+    def test_session_by_prefix(self, manager, tools) -> None:
+        manager.remember_session(tools["bash"], {"command": "pytest -q tests/a.py"})
+        assert manager.check(tools["bash"], {"command": "pytest -x"}) == AUTO
+        assert manager.check(tools["bash"], {"command": "pytest && rm -rf /"}) == ASK
+        assert manager.check(tools["bash"], {"command": "npm test"}) == ASK
+
+    def test_session_hint_names_prefix(self, manager, tools) -> None:
+        hint = manager.session_scope_hint(tools["bash"], {"command": "git commit -m x"})
+        assert "`git commit`" in hint
+
+
+class TestAlways:
+    def test_bash_rule_persists_prefix(self, manager, tools, settings) -> None:
+        manager.remember_always(tools["bash"], {"command": "python -m pytest -q"})
+        assert AlwaysAllowRule(tool="bash", command_prefix="python -m pytest") in (
+            manager.always_allow_rules
         )
-        assert decision == PermissionDecision.NEEDS_APPROVAL
+        assert 'command_prefix = "python -m pytest"' in settings.permissions_file.read_text()
 
-    def test_write_always_needs_approval_initially(
-        self, manager: PermissionManager, registry, settings: FakeSettings
-    ) -> None:
-        decision = manager.check(
-            registry.get("write_file"),
-            {"path": str(settings.output_dir / "new.txt"), "content": "x"},
-        )
-        assert decision == PermissionDecision.NEEDS_APPROVAL
+    def test_write_rule_persists_folder_pattern(self, manager, tools, project) -> None:
+        manager.remember_always(tools["write_file"], {"path": "src/a.py"})
+        rule = manager.always_allow_rules[0]
+        assert rule.path_pattern == str(project.resolve() / "src" / "*")
 
-    def test_delete_always_needs_approval_initially(
-        self, manager: PermissionManager, registry, settings: FakeSettings
-    ) -> None:
-        decision = manager.check(
-            registry.get("delete_file"), {"path": str(settings.output_dir / "x.txt")}
-        )
-        assert decision == PermissionDecision.NEEDS_APPROVAL
+    def test_rules_reload_from_disk(self, manager, tools, settings, project) -> None:
+        manager.remember_always(tools["bash"], {"command": "pytest"})
+        fresh = PermissionManager(settings=settings, project_root=project)  # type: ignore[arg-type]
+        assert fresh.check(tools["bash"], {"command": "pytest -k foo"}) == AUTO
 
-    def test_list_directory_inside_whitelist_auto_approved(
-        self, manager: PermissionManager, registry, settings: FakeSettings
-    ) -> None:
-        decision = manager.check(
-            registry.get("list_directory"), {"path": str(settings.output_dir)}
-        )
-        assert decision == PermissionDecision.AUTO_APPROVED
-
-
-# ---------------------------------------------------------------------------
-# Path normalization
-# ---------------------------------------------------------------------------
-
-
-class TestPathNormalization:
-    def test_relative_path_components_resolved(
-        self, manager: PermissionManager, registry, settings: FakeSettings
-    ) -> None:
-        # Path con `../` que termina dentro del whitelist
-        sub = settings.output_dir / "sub"
-        sub.mkdir()
-        weird_path = str(sub / ".." / "file.txt")
-
-        decision = manager.check(registry.get("read_file"), {"path": weird_path})
-        assert decision == PermissionDecision.AUTO_APPROVED
-
-
-# ---------------------------------------------------------------------------
-# Session allows
-# ---------------------------------------------------------------------------
-
-
-class TestSessionAllows:
-    def test_remember_session_approves_exact_match(
-        self, manager: PermissionManager, registry, settings: FakeSettings
-    ) -> None:
-        args = {"path": str(settings.output_dir / "x.txt"), "content": "data"}
-
-        manager.remember_session("write_file", args)
-
-        decision = manager.check(registry.get("write_file"), args)
-        assert decision == PermissionDecision.AUTO_APPROVED
-
-    def test_session_allows_does_not_match_different_args(
-        self, manager: PermissionManager, registry, settings: FakeSettings
-    ) -> None:
-        args1 = {"path": str(settings.output_dir / "x.txt"), "content": "v1"}
-        args2 = {"path": str(settings.output_dir / "x.txt"), "content": "v2"}
-
-        manager.remember_session("write_file", args1)
-
-        decision = manager.check(registry.get("write_file"), args2)
-        assert decision == PermissionDecision.NEEDS_APPROVAL
-
-    def test_session_allows_does_not_persist_across_managers(
-        self, manager: PermissionManager, registry, settings: FakeSettings
-    ) -> None:
-        args = {"path": str(settings.output_dir / "x.txt"), "content": "v"}
-        manager.remember_session("write_file", args)
-
-        # Nuevo manager (simula cierre y reapertura de sesión)
-        manager2 = PermissionManager(settings=settings)  # type: ignore[arg-type]
-        decision = manager2.check(registry.get("write_file"), args)
-        assert decision == PermissionDecision.NEEDS_APPROVAL
-
-
-# ---------------------------------------------------------------------------
-# Always allows + persistencia TOML
-# ---------------------------------------------------------------------------
-
-
-class TestAlwaysAllows:
-    def test_remember_always_creates_pattern_for_path_tools(
-        self, manager: PermissionManager, registry, settings: FakeSettings
-    ) -> None:
-        args = {
-            "path": str(settings.output_dir / "q3.pptx"),
-            "content": "data",
-        }
-        manager.remember_always("write_file", args)
-
-        rules = manager.always_allow_rules
-        assert len(rules) == 1
-        assert rules[0].tool == "write_file"
-        assert rules[0].path_pattern is not None
-        assert rules[0].path_pattern.endswith("/*")
-
-    def test_remember_always_persists_to_toml(
-        self, manager: PermissionManager, registry, settings: FakeSettings
-    ) -> None:
-        manager.remember_always(
-            "write_file",
-            {"path": str(settings.output_dir / "x.txt"), "content": "v"},
-        )
-
-        assert settings.permissions_file.exists()
-        content = settings.permissions_file.read_text()
-        assert "[[allow]]" in content
-        assert 'tool = "write_file"' in content
-
-    def test_always_allow_loads_from_toml_on_startup(
-        self, settings: FakeSettings, registry
-    ) -> None:
-        # Pre-poblar el TOML antes de crear el manager
-        settings.permissions_file.parent.mkdir(parents=True, exist_ok=True)
-        settings.permissions_file.write_text(
-            f"""[[allow]]
-tool = "write_file"
-path_pattern = "{settings.output_dir}/*"
-"""
-        )
-        manager = PermissionManager(settings=settings)  # type: ignore[arg-type]
-
-        decision = manager.check(
-            registry.get("write_file"),
-            {
-                "path": str(settings.output_dir / "any_file.txt"),
-                "content": "v",
-            },
-        )
-        assert decision == PermissionDecision.AUTO_APPROVED
-
-    def test_always_allow_pattern_does_not_match_outside_dir(
-        self, settings: FakeSettings, registry
-    ) -> None:
-        settings.permissions_file.parent.mkdir(parents=True, exist_ok=True)
-        settings.permissions_file.write_text(
-            f"""[[allow]]
-tool = "write_file"
-path_pattern = "{settings.output_dir}/*"
-"""
-        )
-        manager = PermissionManager(settings=settings)  # type: ignore[arg-type]
-
-        decision = manager.check(
-            registry.get("write_file"),
-            {"path": "/etc/passwd", "content": "evil"},
-        )
-        assert decision == PermissionDecision.NEEDS_APPROVAL
-
-    def test_corrupt_toml_is_ignored_silently(
-        self, settings: FakeSettings, registry
-    ) -> None:
-        settings.permissions_file.parent.mkdir(parents=True, exist_ok=True)
-        settings.permissions_file.write_text("this is not valid TOML [[[")
-
-        # No debería crashear
-        manager = PermissionManager(settings=settings)  # type: ignore[arg-type]
+    def test_corrupt_toml_ignored(self, settings, project) -> None:
+        settings.permissions_file.parent.mkdir(parents=True)
+        settings.permissions_file.write_text("[[[not toml", encoding="utf-8")
+        manager = PermissionManager(settings=settings, project_root=project)  # type: ignore[arg-type]
         assert manager.always_allow_rules == []
 
-    def test_remember_always_also_applies_to_current_session(
-        self, manager: PermissionManager, registry, settings: FakeSettings
-    ) -> None:
-        # Misma instancia de manager, mismo path → debe estar aprobado inmediatamente
-        args = {
-            "path": str(settings.output_dir / "exact.txt"),
-            "content": "v",
-        }
-        manager.remember_always("write_file", args)
-
-        decision = manager.check(registry.get("write_file"), args)
-        assert decision == PermissionDecision.AUTO_APPROVED
-
-    def test_remember_always_does_not_duplicate(
-        self, manager: PermissionManager, registry, settings: FakeSettings
-    ) -> None:
-        args = {
-            "path": str(settings.output_dir / "x.txt"),
-            "content": "v",
-        }
-        manager.remember_always("write_file", args)
-        manager.remember_always("write_file", args)
-
-        # La regla debería existir solo una vez
-        matching = [r for r in manager.always_allow_rules if r.tool == "write_file"]
-        assert len(matching) == 1
+    def test_no_duplicate_rules(self, manager, tools) -> None:
+        manager.remember_always(tools["bash"], {"command": "pytest -q"})
+        manager.remember_always(tools["bash"], {"command": "pytest -x"})
+        assert len(manager.always_allow_rules) == 1
 
 
-# ---------------------------------------------------------------------------
-# AlwaysAllowRule.matches en aislamiento
-# ---------------------------------------------------------------------------
+class TestCommandClassification:
+    @pytest.mark.parametrize(
+        "command",
+        ["ls", "git diff HEAD~1", "git log --oneline | head -5", "rg foo src", "find . -name x"],
+    )
+    def test_readonly(self, command: str) -> None:
+        assert is_readonly_command(command)
 
+    @pytest.mark.parametrize(
+        "command",
+        [
+            "rm -rf x", "git push", "git status; rm x", "ls > out.txt", "cat $(echo x)",
+            "find . -delete", "echo `id`", "pytest & curl x",
+        ],
+    )
+    def test_not_readonly(self, command: str) -> None:
+        assert not is_readonly_command(command)
 
-class TestAlwaysAllowRule:
-    def test_matches_tool_name(self) -> None:
-        rule = AlwaysAllowRule(tool="write_file", path_pattern=None)
-        assert rule.matches("write_file", {})
-        assert not rule.matches("delete_file", {})
+    @pytest.mark.parametrize(
+        ("command", "prefix"),
+        [
+            ("pytest -x tests/", "pytest"),
+            ("git commit -m 'x y'", "git commit"),
+            ("python -m pytest -q", "python -m pytest"),
+            ("npm run build", "npm run"),
+            ("ruff check .", "ruff"),
+        ],
+    )
+    def test_prefix(self, command: str, prefix: str) -> None:
+        assert command_prefix(command) == prefix
 
-    def test_matches_with_path_pattern(self, tmp_path: Path) -> None:
-        rule = AlwaysAllowRule(
-            tool="write_file", path_pattern=str(tmp_path / "*")
-        )
-        assert rule.matches("write_file", {"path": str(tmp_path / "a.txt")})
-        assert not rule.matches("write_file", {"path": "/other/dir/a.txt"})
-
-    def test_pattern_none_matches_any_args(self) -> None:
-        rule = AlwaysAllowRule(tool="ping", path_pattern=None)
-        assert rule.matches("ping", {})
-        assert rule.matches("ping", {"x": "y"})
-
-    def test_pattern_set_but_no_path_arg_does_not_match(self) -> None:
-        rule = AlwaysAllowRule(tool="ping", path_pattern="/*")
-        assert not rule.matches("ping", {"other": "value"})
-
-
-# ---------------------------------------------------------------------------
-# Browser sticky (v0.3)
-# ---------------------------------------------------------------------------
-
-
-class TestBrowserSticky:
-    def test_browser_nav_needs_approval_initially(
-        self, manager: PermissionManager, registry
-    ) -> None:
-        decision = manager.check(
-            registry.get("browser_navigate"),
-            {"url": "https://www.linkedin.com/sales/"},
-        )
-        assert decision == PermissionDecision.NEEDS_APPROVAL
-
-    def test_remember_browser_session_approves_same_domain(
-        self, manager: PermissionManager, registry
-    ) -> None:
-        manager.remember_browser_session(
-            "browser_navigate", {"url": "https://www.linkedin.com/sales/home"}
-        )
-        # Otra URL del mismo dominio (sin www) → auto
-        decision = manager.check(
-            registry.get("browser_navigate"),
-            {"url": "https://linkedin.com/sales/lead/123"},
-        )
-        assert decision == PermissionDecision.AUTO_APPROVED
-
-    def test_browser_sticky_covers_subdomains(
-        self, manager: PermissionManager, registry
-    ) -> None:
-        manager.remember_browser_session(
-            "browser_navigate", {"url": "https://linkedin.com/feed"}
-        )
-        decision = manager.check(
-            registry.get("browser_navigate"),
-            {"url": "https://www.linkedin.com/in/someone"},
-        )
-        assert decision == PermissionDecision.AUTO_APPROVED
-
-    def test_open_tab_and_navigate_share_group(
-        self, manager: PermissionManager, registry
-    ) -> None:
-        # Aprobar open_tab a un dominio cubre navigate al mismo dominio
-        manager.remember_browser_session(
-            "browser_open_tab", {"url": "https://example.com/a"}
-        )
-        decision = manager.check(
-            registry.get("browser_navigate"), {"url": "https://example.com/b"}
-        )
-        assert decision == PermissionDecision.AUTO_APPROVED
-
-    def test_browser_sticky_does_not_leak_to_other_domain(
-        self, manager: PermissionManager, registry
-    ) -> None:
-        manager.remember_browser_session(
-            "browser_navigate", {"url": "https://linkedin.com/sales/"}
-        )
-        decision = manager.check(
-            registry.get("browser_navigate"), {"url": "https://evil.com/"}
-        )
-        assert decision == PermissionDecision.NEEDS_APPROVAL
-
-    def test_browser_action_without_url_needs_approval(
-        self, manager: PermissionManager, registry
-    ) -> None:
-        # click no tiene url: aun con sticky de un dominio, sigue pidiendo aprobación
-        manager.remember_browser_session(
-            "browser_navigate", {"url": "https://linkedin.com/"}
-        )
-        decision = manager.check(
-            registry.get("browser_click"), {"selector": "button.connect"}
-        )
-        assert decision == PermissionDecision.NEEDS_APPROVAL
-
-    def test_remember_browser_session_action_falls_back_to_exact_args(
-        self, manager: PermissionManager, registry
-    ) -> None:
-        args = {"selector": "button.connect"}
-        manager.remember_browser_session("browser_click", args)
-        # Mismo selector → auto (exact-args session)
-        assert (
-            manager.check(registry.get("browser_click"), args)
-            == PermissionDecision.AUTO_APPROVED
-        )
-        # Otro selector → sigue pidiendo
-        assert (
-            manager.check(registry.get("browser_click"), {"selector": ".other"})
-            == PermissionDecision.NEEDS_APPROVAL
-        )
-
-    def test_browser_sticky_does_not_persist_across_managers(
-        self, manager: PermissionManager, registry, settings: FakeSettings
-    ) -> None:
-        manager.remember_browser_session(
-            "browser_navigate", {"url": "https://linkedin.com/"}
-        )
-        manager2 = PermissionManager(settings=settings)  # type: ignore[arg-type]
-        decision = manager2.check(
-            registry.get("browser_navigate"), {"url": "https://linkedin.com/feed"}
-        )
-        assert decision == PermissionDecision.NEEDS_APPROVAL
-
-    def test_browser_screenshot_path_outside_whitelist_needs_approval(
-        self, manager: PermissionManager, registry, tmp_path: Path
-    ) -> None:
-        # READ category, pero el path se valida como escritura → fuera de
-        # whitelist pide aprobación.
-        decision = manager.check(
-            registry.get("browser_screenshot"),
-            {"output_path": str(tmp_path / "out" / "shot.png")},
-        )
-        assert decision == PermissionDecision.NEEDS_APPROVAL
+    def test_prefix_never_matches_chained(self) -> None:
+        assert command_matches_prefix("pytest -q", "pytest")
+        assert not command_matches_prefix("pytest; rm x", "pytest")
+        assert not command_matches_prefix("pytestx", "pytest")
