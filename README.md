@@ -50,7 +50,7 @@ no desde la del harness. La config se lee igual del `.env` del harness.
 **Opción A: alias (recomendado).** Agregá al final de `~/.zshrc`:
 
 ```bash
-alias wso=/ruta/a/wso-ai-harness/.venv/bin/wso
+alias wso=/Users/coco/Documents/DESAROLLO/INTERNO/0008_wso-ai-harness/.venv/bin/wso
 ```
 
 Recargá con `source ~/.zshrc`. Desde ahí, en cualquier carpeta:
